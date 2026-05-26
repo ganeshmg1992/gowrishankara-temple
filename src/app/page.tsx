@@ -16,7 +16,7 @@ const TEMPLE_NAME = "Sri Gowrishankara Temple";
 const FALLBACK_SEVAS = [
   { id: 's1', name_en: 'Daily Kumkumarchana', name_kn: 'ದೈನಂದಿನ ಕುಂಕುಮಾರ್ಚನೆ', price: 51 },
   { id: 's2', name_en: 'Special Rudrabhisheka', name_kn: 'ವಿಶೇಷ ರುದ್ರಾಭಿಷೇಕ ಪೂಜೆ', price: 101 },
-  { id: 's3', name_en: 'Pradosha Pooja Bilvarchana', name_kn: 'ಪ್ರದೋಷ ಪೂಜೆ ಬಿಲ್vಾರ್ಚನೆ', price: 151 },
+  { id: 's3', name_en: 'Pradosha Pooja Bilvarchana', name_kn: 'ಪ್ರದೋಷ ಪೂಜೆ ಬಿಲ್ವಾರ್ಚನೆ', price: 151 },
   { id: 's4', name_en: 'Sankashta Hara Chaturthi Seva', name_kn: 'ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ ವಿಶೇಷ ಸೇವೆ', price: 251 }
 ];
 
@@ -56,15 +56,12 @@ export default function Home() {
   const [devoteeName, setDevoteeName] = useState('');
   const [gothra, setGothra] = useState('');
   const [rashi, setRashi] = useState('');
-  const [transactionId, setTransactionId] = useState('');
-  const [paymentInitiated, setPaymentInitiated] = useState(false);
   const [bookingStatus, setBookingStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
 
   useEffect(() => {
     async function fetchData() {
       try {
         setLoading(true);
-        // Attempt live database fetch from Supabase
         const { data: sevasData } = await supabase.from('sevas').select('*').order('price', { ascending: true });
         const { data: eventsData } = await supabase.from('temple_events').select('*').order('event_date', { ascending: true });
         
@@ -79,32 +76,18 @@ export default function Home() {
     fetchData();
   }, []);
 
-  const triggerUPIPayment = () => {
-    if (!selectedSeva || !devoteeName) {
-      alert(language === 'kn' ? 'ದಯವಿಟ್ಟು ಹೆಸರನ್ನು ನಮೂದಿಸಿ' : 'Please enter devotee name');
-      return;
-    }
-
-    // Sanitize string content to ensure cross-app compliance across mobile ecosystem
-    const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
-    const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
-    const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 35);
-
-    // Build automated mobile deep-link intent string
-    const upiUrl = `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&am=${selectedSeva.price}&cu=INR&tn=${encodeURIComponent(txNote)}`;
-    
-    // Hand execution flow over to native payment sheet handler
-    window.location.href = upiUrl;
-    setPaymentInitiated(true);
-  };
-
-  const handleBookingSubmit = async (e: React.FormEvent) => {
+  // Submit booking record to Supabase and seamlessly trigger UPI application
+  const handleBookingAndPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedSeva || !devoteeName || !transactionId) return;
+    if (!selectedSeva || !devoteeName) return;
 
     setBookingStatus('submitting');
 
+    // Create a temporary reference code for temple accounts to trace back manually
+    const generatedRefId = `TXT-${Math.floor(100000 + Math.random() * 900000)}`;
+
     try {
+      // 1. Instantly log user details into the database
       const { error } = await supabase.from('seva_bookings').insert([
         {
           devotee_name: devoteeName,
@@ -112,14 +95,26 @@ export default function Home() {
           rashi: rashi || null,
           seva_id: String(selectedSeva.id),
           amount: selectedSeva.price,
-          transaction_id: transactionId,
-          status: 'Pending Verification',
+          transaction_id: generatedRefId,
+          status: 'Awaiting Bank Settlement', // Informative status for back-office tracking
           created_at: new Date().toISOString(),
         }
       ]);
 
       if (error) throw error;
+
+      // 2. Format transaction note for UPI app clarity
+      const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
+      const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
+      const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 35);
+
+      // 3. Construct mobile deep link string
+      const upiUrl = `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&am=${selectedSeva.price}&cu=INR&tn=${encodeURIComponent(txNote)}`;
+      
+      // 4. Fire open the native payment sheet window & show success confirmation immediately behind it
+      window.location.href = upiUrl;
       setBookingStatus('success');
+
     } catch (err) {
       console.error("Submission blocked:", err);
       setBookingStatus('error');
@@ -131,8 +126,6 @@ export default function Home() {
     setDevoteeName('');
     setGothra('');
     setRashi('');
-    setTransactionId('');
-    setPaymentInitiated(false);
     setBookingStatus('idle');
   };
 
@@ -288,19 +281,19 @@ export default function Home() {
               <div className="text-center py-6 space-y-3">
                 <div className="w-14 h-14 bg-green-100 rounded-full mx-auto flex items-center justify-center text-green-600 text-2xl font-bold">✓</div>
                 <h4 className="text-xl font-bold text-green-700">
-                  {language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ವಿನಂತಿ ಸಲ್ಲಿಕೆಯಾಗಿದೆ!' : 'Booking Requested!'}
+                  {language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ವಿನಂತಿ ಸಲ್ಲಿಕೆಯಾಗಿದೆ!' : 'Booking Complete!'}
                 </h4>
-                <p className="text-sm text-stone-600 px-2">
+                <p className="text-sm text-stone-600 px-2 leading-relaxed">
                   {language === 'kn' 
-                    ? 'ನಿಮ್ಮ ಯುಪಿಐ ಪಾವತಿ ವಿನಂತಿಯನ್ನು ಪರಿಶೀಲನೆಗಾಗಿ ಸ್ವೀಕರಿಸಲಾಗಿದೆ. ಆಡಳಿತ ಮಂಡಳಿಯು ಬ್ಯಾಂಕ್ ಖಾತೆಯನ್ನು ಪರಿಶೀಲಿಸಿದ ನಂತರ ನವೀಕರಿಸಲಾಗುತ್ತದೆ.' 
-                    : 'Your record has been stored. Temple management will verify this against bank ledger receipts shortly.'}
+                    ? 'ನಿಮ್ಮ ಸಂಕಲ್ಪ ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ ಮತ್ತು ಯುಪಿಐ ಪಾವತಿ ಪ್ರಕ್ರಿಯೆ ಪ್ರಾರಂಭಿಸಲಾಗಿದೆ. ಧನ್ಯವಾದಗಳು!' 
+                    : 'Your Sankalpa registration details have been saved, and your mobile UPI application has been invoked.'}
                 </p>
                 <button onClick={resetForm} className="w-full bg-stone-900 text-white font-bold py-2.5 rounded-xl text-sm shadow mt-2">
                   {language === 'kn' ? 'ಮುಚ್ಚಿ' : 'Close'}
                 </button>
               </div>
             ) : (
-              <form onSubmit={handleBookingSubmit} className="space-y-4">
+              <form onSubmit={handleBookingAndPayment} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-stone-600 mb-1">
                     {language === 'kn' ? 'ಭಕ್ತರ ಹೆಸರು *' : 'Devotee Name *'}
@@ -335,54 +328,22 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3">
-                  <div className="flex justify-between text-sm font-bold text-stone-700">
+                <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3 pt-4">
+                  <div className="flex justify-between text-sm font-bold text-stone-700 mb-1">
                     <span>{language === 'kn' ? 'ಸೇವೆ ಶುಲ್ಕ:' : 'Total Amount:'}</span>
                     <span className="text-amber-800 text-base">₹{selectedSeva.price}</span>
                   </div>
 
-                  {!paymentInitiated ? (
-                    <button
-                      type="button"
-                      onClick={triggerUPIPayment}
-                      className="w-full bg-amber-700 hover:bg-amber-800 text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition"
-                    >
-                      📲 {language === 'kn' ? 'ಯುಪಿಐ ಆಪ್ ಮೂಲಕ ನೇರ ಪಾವತಿ' : 'Pay Directly via Mobile UPI App'}
-                    </button>
-                  ) : (
-                    <div className="text-xs text-green-700 bg-green-50 border border-green-200 p-2.5 rounded-lg text-center font-medium">
-                      {language === 'kn' ? '✅ ಯುಪಿಐ ಪಾವತಿ ಪ್ರಕ್ರಿಯೆ ಪ್ರಾರಂಭಿಸಲಾಗಿದೆ' : '✅ UPI Intent Triggered Successfully'}
-                    </div>
-                  )}
+                  <button
+                    type="submit"
+                    disabled={bookingStatus === 'submitting'}
+                    className="w-full bg-amber-700 hover:bg-amber-800 disabled:bg-stone-400 text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition"
+                  >
+                    {bookingStatus === 'submitting' 
+                      ? (language === 'kn' ? 'ಪ್ರಕ್ರಿಯೆಗೊಳಿಸಲಾಗುತ್ತಿದೆ...' : 'Processing Request...') 
+                      : (language === 'kn' ? '📲 ಬುಕ್ ಮಾಡಿ ಮತ್ತು ಪಾವತಿಸಿ' : '📲 Book & Pay with Any UPI App')}
+                  </button>
                 </div>
-
-                {paymentInitiated && (
-                  <div className="space-y-2 pt-2 border-t border-dashed border-stone-200 animate-fadeIn">
-                    <label className="block text-xs font-bold text-stone-600">
-                      {language === 'kn' ? 'ಯುಪಿಐ ಟ್ರಾನ್ಸಾಕ್ಷನ್ ಐಡಿ (UTR ಸಂಖ್ಯೆ) *' : 'UPI Transaction ID / Reference No *'}
-                    </label>
-                    <input 
-                      type="text" required value={transactionId} onChange={(e) => setTransactionId(e.target.value)}
-                      placeholder="Enter 12-digit UTR or Ref number"
-                      className="w-full border border-stone-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-600 bg-amber-50/40"
-                    />
-                    <p className="text-[10px] text-stone-500 leading-relaxed">
-                      {language === 'kn' 
-                        ? 'ಪಾವತಿ ಪೂರ್ಣಗೊಂಡ ನಂತರ ನಿಮ್ಮ ಜಿಪೇ/ಫೋನ್‌ಪೇನಲ್ಲಿ ಕಾಣಿಸುವ UTR ಸಂಖ್ಯೆಯನ್ನು ಇಲ್ಲಿ ನಮೂದಿಸಿ ಬುಕಿಂಗ್ ಪೂರ್ಣಗೊಳಿಸಿ.' 
-                        : 'Once transferred inside your payment wallet app, enter the reference settlement ID to complete your request.'}
-                    </p>
-
-                    <button
-                      type="submit"
-                      disabled={bookingStatus === 'submitting'}
-                      className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-white font-bold py-3 rounded-xl shadow-lg text-sm mt-2 transition"
-                    >
-                      {bookingStatus === 'submitting' 
-                        ? (language === 'kn' ? 'ಸಲ್ಲಿಸಲಾಗುತ್ತಿದೆ...' : 'Submitting Reference...') 
-                        : (language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ಖಚಿತಪಡಿಸಿ' : 'Confirm Registration')}
-                    </button>
-                  </div>
-                )}
               </form>
             )}
           </div>
