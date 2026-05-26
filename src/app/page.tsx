@@ -1,18 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Image from 'next/image';
-import { supabase } from '@/app/lib/supabase';
+import React, { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
 
-interface DarshanData {
-  title_en: string;
-  title_kn: string;
-  description_en: string;
-  description_kn: string;
-  image_url: string;
-}
+// Initialize Supabase Client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-interface SevaItem {
+// UPI Constants
+const TEMPLE_UPI_ID = "gowrishankaratemple@sbi"; // Replace with the actual temple UPI ID
+const TEMPLE_NAME = "Sri Gowrishankara Temple";
+
+interface Seva {
   id: string;
   name_en: string;
   name_kn: string;
@@ -27,376 +27,378 @@ interface TempleEvent {
   is_major_festival: boolean;
 }
 
-type ActiveTab = 'darshan' | 'sevas' | 'calendar';
-
 export default function Home() {
-  const [lang, setLang] = useState<'kn' | 'en'>('kn');
-  const [activeTab, setActiveTab] = useState<ActiveTab>('darshan'); // Default to Darshan view
-  const [darshan, setDarshan] = useState<DarshanData | null>(null);
+  // Tab State: 'darshan' | 'sevas' | 'calendar'
+  const [activeTab, setActiveTab] = useState<'darshan' | 'sevas' | 'calendar'>('darshan');
+  const [language, setLanguage] = useState<'kn' | 'en'>('kn');
+  
+  // Data States
+  const [sevas, setSevas] = useState<Seva[]>([]);
   const [events, setEvents] = useState<TempleEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Seva Booking States
-  const [selectedSeva, setSelectedSeva] = useState<SevaItem | null>(null);
+  // Booking Form State
+  const [selectedSeva, setSelectedSeva] = useState<Seva | null>(null);
   const [devoteeName, setDevoteeName] = useState('');
   const [gothra, setGothra] = useState('');
   const [rashi, setRashi] = useState('');
-  const [sankalpaDate, setSankalpaDate] = useState('');
-  const [bookingLoading, setBookingLoading] = useState(false);
-  const [bookingSuccess, setBookingSuccess] = useState(false);
+  const [transactionId, setTransactionId] = useState('');
+  const [paymentInitiated, setPaymentInitiated] = useState(false);
+  const [bookingStatus, setBookingStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
 
-  const sevasList: SevaItem[] = [
-    { id: '1', name_en: 'Daily Kumkumarchana', name_kn: 'ದೈನಂದಿನ ಕುಂಕುಮಾರ್ಚನೆ', price: 51 },
-    { id: '2', name_en: 'Special Rudrabhisheka', name_kn: 'ವಿಶೇಷ ರುದ್ರಾಭಿಷೇಕ ಪೂಜೆ', price: 101 },
-    { id: '3', name_en: 'Sankashta Hara Chaturthi Seva', name_kn: 'ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ ವಿಶೇಷ ಸೇವೆ', price: 251 },
-    { id: '4', name_en: 'Pradosha Pooja Bilvarchana', name_kn: 'ಪ್ರದೋಷ ಪೂಜೆ ಬಿಲ್ವಾರ್ಚನೆ', price: 151 },
-  ];
-
+  // Fetch data from Supabase
   useEffect(() => {
-    async function fetchTempleData() {
+    async function fetchData() {
       try {
-        const { data: darshanData } = await supabase
-          .from('daily_darshan')
-          .select('title_en, title_kn, description_en, description_kn, image_url')
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (darshanData && darshanData.length > 0) {
-          setDarshan(darshanData[0]);
-        }
-
-        const { data: eventData } = await supabase
-          .from('temple_events')
-          .select('id, event_date, title_en, title_kn, is_major_festival')
-          .gte('event_date', new Date().toISOString().split('T')[0])
-          .order('event_date', { ascending: true })
-          .limit(6);
-
-        if (eventData) {
-          setEvents(eventData);
-        }
+        setLoading(true);
+        const { data: sevasData } = await supabase.from('sevas').select('*').order('price', { ascending: true });
+        const { data: eventsData } = await supabase.from('temple_events').select('*').order('event_date', { ascending: true });
+        
+        if (sevasData) setSevas(sevasData);
+        if (eventsData) setEvents(eventsData);
       } catch (err) {
-        console.error('Error fetching database data:', err);
+        console.error("Error pulling database records:", err);
       } finally {
         setLoading(false);
       }
     }
-    fetchTempleData();
+    fetchData();
   }, []);
 
-  const formatDate = (dateStr: string) => {
-    const options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', weekday: 'short' };
-    return new Date(dateStr).toLocaleDateString(lang === 'en' ? 'en-IN' : 'kn-IN', options);
+  // Launch Mobile UPI Apps dynamically
+  const triggerUPIPayment = () => {
+    if (!selectedSeva || !devoteeName) {
+      alert(language === 'kn' ? 'ದಯವಿಟ್ಟು ಹೆಸರನ್ನು ನಮೂದಿಸಿ' : 'Please enter devotee name');
+      return;
+    }
+
+    const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
+    const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
+    const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 50);
+
+    // Standard native UPI deep link format
+    const upiUrl = `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&am=${selectedSeva.price}&cu=INR&tn=${encodeURIComponent(txNote)}`;
+    
+    // Open installed payment ecosystem apps
+    window.location.href = upiUrl;
+    setPaymentInitiated(true);
   };
 
-  const text = {
-    en: {
-      templeName: 'Sri Gowrishankara Temple',
-      location: 'Chikkalasandra, Bengaluru',
-      tabDarshan: '🌅 Darshan',
-      tabSevas: '🛕 Seva Booking',
-      tabCalendar: '📅 Festivals',
-      darshanTitle: "Today's Daily Darshan",
-      loading: 'Loading Blessings...',
-      noDarshan: 'No Darshan details available for today.',
-      btnMap: '📍 View Map & Route',
-      btnCall: '📞 Call Temple Priest',
-      btnShare: '💬 Share on WhatsApp',
-      timings: 'Temple Timings',
-      morning: 'Morning: 6:00 AM – 11:30 AM',
-      evening: 'Evening: 5:30 PM – 8:30 PM',
-      calendarHeader: 'Upcoming Festivals & Auspicious Days',
-      noEvents: 'No special events listed for this month.',
-      sevaHeader: 'Book Sacred Sevas Online',
-      sevaSub: 'Fill details and pay securely via UPI instantly.',
-      lblPrice: 'Token Amount: ₹',
-      btnBookNow: 'Book Seva / ಸೇವೆ ಕಾಯ್ದಿರಿಸಿ',
-      formHeader: 'Devotee Sankalpa Details',
-      lblName: 'Devotee Name / ಭಕ್ತರ ಹೆಸರು *',
-      lblGothra: 'Gothra / ಗೋತ್ರ (Optional)',
-      lblRashi: 'Rashi / ರಾಶಿ (Optional)',
-      lblDate: 'Sankalpa Date / ಪೂಜಾ ದಿನಾಂಕ *',
-      btnPaySubmit: 'Pay Token & Confirm Booking',
-      msgSuccess: '✨ Seva Booked Successfully! Recieved by Temple Desk. ✨',
-      btnClose: 'Close / ಮುಚ್ಚಿ'
-    },
-    kn: {
-      templeName: 'ಶ್ರೀ ಗೌರಿಶಂಕರ ದೇವಸ್ಥಾನ',
-      location: 'ಚಿಕ್ಕಲಸಂದ್ರ, ಬೆಂಗಳೂರು',
-      tabDarshan: '🌅 ದರ್ಶನ',
-      tabSevas: '🛕 ಸೇವೆಗಳು',
-      tabCalendar: '📅 ಹಬ್ಬಗಳು',
-      darshanTitle: 'ಇಂದಿನ ದೈನಂದಿನ ದರ್ಶನ',
-      loading: 'ದರ್ಶನ ಮಾಹಿತಿ ಲೋಡ್ ಆಗುತ್ತಿದೆ...',
-      noDarshan: 'ಇಂದಿನ ದರ್ಶನದ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ.',
-      btnMap: '📍 ದಾರಿಯ ನಕ್ಷೆ (ಗೂಗಲ್ ಮ್ಯಾಪ್ಸ್)',
-      btnCall: '📞 ಅರ್ಚಕರನ್ನು ಸಂಪರ್ಕಿಸಿ',
-      btnShare: '💬 ವಾಟ್ಸಾಪ್‌ನಲ್ಲಿ ಹಂಚಿಕೊಳ್ಳಿ',
-      timings: 'ದೇವಸ್ಥಾನದ ಸಮಯ',
-      morning: 'ಬೆಳಗ್ಗೆ: 6:00 ರಿಂದ 11:30',
-      evening: 'ಸಂಜೆ: 5:30 ರಿಂದ 8:30',
-      calendarHeader: 'ಮುಂಬರುವ ಹಬ್ಬಗಳು ಮತ್ತು ವಿಶೇಷ ದಿನಗಳು',
-      noEvents: 'ಈ ತಿಂಗಳು ಯಾವುದೇ ವಿಶೇಷ ಆಚರಣೆಗಳು ಪಟ್ಟಿಯಾಗಿಲ್ಲ.',
-      sevaHeader: 'ಆನ್‌ಲೈನ್ ಸೇವಾ ಬುಕಿಂಗ್',
-      sevaSub: 'ವಿವರಗಳನ್ನು ಭರ್ತಿ ಮಾಡಿ ಮತ್ತು ಯುಪಿಐ (UPI) ಮೂಲಕ ತಕ್ಷಣ ಪಾವತಿಸಿ.',
-      lblPrice: 'ಸೇವಾ ಕಾಣಿಕೆ: ₹',
-      btnBookNow: 'ಸೇವೆ ಕಾಯ್ದಿರಿಸಿ',
-      formHeader: 'ಭಕ್ತರ ಸಂಕಲ್ಪ ವಿವರಗಳು',
-      lblName: 'ಭಕ್ತರ ಹೆಸರು (Devotee Name) *',
-      lblGothra: 'ಗೋತ್ರ (Gothra - ಐಚ್ಛಿಕ)',
-      lblRashi: 'ರಾಶಿ (Rashi - ಐಚ್ಛಿಕ)',
-      lblDate: 'ಸಂಕಲ್ಪ ದಿನಾಂಕ (Sankalpa Date) *',
-      btnPaySubmit: 'ಕಾಣಿಕೆ ಪಾವತಿಸಿ ಬುಕಿಂಗ್ ಖಚಿತಪಡಿಸಿ',
-      msgSuccess: '✨ ಸೇವೆ ಯಶಸ್ವಿಯಾಗಿ ಕಾಯ್ದಿರಿಸಲಾಗಿದೆ! ಅರ್ಚಕರ ಮಂಡಳಿಗೆ ತಲುಪಿದೆ. ✨',
-      btnClose: 'ಮುಚ್ಚಿ'
+  // Submit record to Supabase
+  const handleBookingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSeva || !devoteeName || !transactionId) return;
+
+    setBookingStatus('submitting');
+
+    try {
+      const { error } = await supabase.from('seva_bookings').insert([
+        {
+          devotee_name: devoteeName,
+          gothra: gothra || null,
+          rashi: rashi || null,
+          seva_id: selectedSeva.id,
+          amount: selectedSeva.price,
+          transaction_id: transactionId,
+          status: 'Pending Verification', // Explicit status requiring Admin check against statements
+          created_at: new Date().toISOString(),
+        }
+      ]);
+
+      if (error) throw error;
+      setBookingStatus('success');
+    } catch (err) {
+      console.error(err);
+      setBookingStatus('error');
     }
   };
 
-  const handleSevaSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedSeva || !devoteeName || !sankalpaDate) return;
-    setBookingLoading(true);
-
-    setTimeout(async () => {
-      const mockPaymentId = 'PAY_UPI_' + Math.random().toString(36).substring(2, 11).toUpperCase();
-      try {
-        await supabase.from('seva_bookings').insert([
-          {
-            seva_name_en: selectedSeva.name_en,
-            seva_name_kn: selectedSeva.name_kn,
-            price: selectedSeva.price,
-            devotee_name: devoteeName,
-            gothra: gothra || 'Not Specified',
-            rashi: rashi || 'Not Specified',
-            sankalpa_date: sankalpaDate,
-            payment_status: 'Paid',
-            payment_id: mockPaymentId
-          }
-        ]);
-        setBookingSuccess(true);
-        setDevoteeName(''); setGothra(''); setRashi(''); setSankalpaDate('');
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setBookingLoading(false);
-      }
-    }, 1200);
+  const resetForm = () => {
+    setSelectedSeva(null);
+    setDevoteeName('');
+    setGothra('');
+    setRashi('');
+    setTransactionId('');
+    setPaymentInitiated(false);
+    setBookingStatus('idle');
   };
 
   return (
-    <div className="min-h-screen bg-[#faf6f0] pb-36 font-sans antialiased text-[#3c2f2f]">
-      
-      {/* FIXED HEADER BLOCK */}
-      <header className="bg-white border-b border-[#eedecb] px-4 py-4">
-        <div className="max-w-md mx-auto flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-black text-[#4a1c1c] tracking-tight">{text[lang].templeName}</h1>
-            <p className="text-sm font-bold text-[#8c7355] mt-0.5">{text[lang].location}</p>
-          </div>
-          <button
-            onClick={() => setLang(lang === 'en' ? 'kn' : 'en')}
-            className="bg-[#4a1c1c] text-white font-black py-2.5 px-4 rounded-xl shadow-sm text-base border border-[#eedecb]"
-          >
-            {lang === 'en' ? 'ಕನ್ನಡ' : 'English'}
-          </button>
+    <div className="min-h-screen bg-stone-50 text-stone-800 font-sans antialiased">
+      {/* Header Panel */}
+      <header className="bg-white border-b border-stone-200 sticky top-0 z-40 shadow-sm max-w-md mx-auto w-full px-4 py-3 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-amber-800">
+            {language === 'kn' ? 'ಶ್ರೀ ಗೌರಿಶಂಕರ ದೇವಸ್ಥಾನ' : 'Sri Gowrishankara Temple'}
+          </h1>
+          <p className="text-xs text-stone-500">
+            {language === 'kn' ? 'ಭಟ್ರಹಳ್ಳಿ, ಬೆಂಗಳೂರು' : 'Bhattarahalli, Bengaluru'}
+          </p>
         </div>
+        <button 
+          onClick={() => setLanguage(l => l === 'kn' ? 'en' : 'kn')}
+          className="bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs px-3 py-1.5 rounded-full font-semibold border border-amber-200 transition"
+        >
+          {language === 'kn' ? 'English' : 'ಕನ್ನಡ'}
+        </button>
       </header>
 
-      {/* FIXED TAB NAVIGATION ENGINE */}
-      <div className="bg-white sticky top-0 z-30 border-b-2 border-[#eedecb] shadow-sm px-2 py-2">
-        <div className="max-w-md mx-auto grid grid-cols-3 gap-1.5">
-          <button
-            onClick={() => setActiveTab('darshan')}
-            className={`py-3.5 text-center font-black rounded-xl text-base transition-all active:scale-95 ${
-              activeTab === 'darshan'
-                ? 'bg-[#4a1c1c] text-white shadow-md'
-                : 'bg-[#faf6f0] text-[#5a4848] hover:bg-[#eedecb]/40'
-            }`}
-          >
-            {text[lang].tabDarshan}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('sevas')}
-            className={`py-3.5 text-center font-black rounded-xl text-base transition-all active:scale-95 ${
-              activeTab === 'sevas'
-                ? 'bg-[#4a1c1c] text-white shadow-md'
-                : 'bg-[#faf6f0] text-[#5a4848] hover:bg-[#eedecb]/40'
-            }`}
-          >
-            {text[lang].tabSevas}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('calendar')}
-            className={`py-3.5 text-center font-black rounded-xl text-base transition-all active:scale-95 ${
-              activeTab === 'calendar'
-                ? 'bg-[#4a1c1c] text-white shadow-md'
-                : 'bg-[#faf6f0] text-[#5a4848] hover:bg-[#eedecb]/40'
-            }`}
-          >
-            {text[lang].tabCalendar}
-          </button>
+      {/* Main Container */}
+      <main className="max-w-md mx-auto bg-white min-h-[calc(100vh-65px)] pb-24 shadow-inline">
+        {/* Navigation Tabs Bar */}
+        <div className="flex border-b border-stone-200 bg-stone-100/50">
+          {(['darshan', 'sevas', 'calendar'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 py-3 text-center text-sm font-medium transition-all ${
+                activeTab === tab 
+                  ? 'bg-white text-amber-800 border-b-2 border-amber-700 font-bold' 
+                  : 'text-stone-500 hover:text-stone-800'
+              }`}
+            >
+              {tab === 'darshan' && (language === 'kn' ? '🔱 ದರ್ಶನ' : '🔱 Darshan')}
+              {tab === 'sevas' && (language === 'kn' ? '🙏 ಸೇವೆಗಳು' : '🙏 Sevas')}
+              {tab === 'calendar' && (language === 'kn' ? '📅 ಹಬ್ಬಗಳು' : '📅 Calendar')}
+            </button>
+          ))}
         </div>
-      </div>
 
-      {/* CORE TAB DYNAMIC RENDER PORTAL */}
-      <main className="max-w-md mx-auto p-4">
-        
-        {/* VIEW 1: DAILY DARSHAN TAB */}
-        {activeTab === 'darshan' && (
-          <div className="space-y-4 animate-fade-in">
-            <section className="bg-white rounded-3xl p-5 shadow-sm border-2 border-[#eedecb] space-y-4">
-              <h2 className="text-lg font-black text-[#8c503a] uppercase tracking-wide border-b border-dashed border-[#eedecb] pb-2">
-                {text[lang].darshanTitle}
-              </h2>
-              {loading ? (
-                <p className="text-center py-12 font-bold text-[#8c7e7e] animate-pulse">{text[lang].loading}</p>
-              ) : darshan ? (
+        {/* Tab Contents */}
+        <div className="p-4">
+          {loading ? (
+            <div className="text-center py-12 text-stone-400 text-sm animate-pulse">
+              {language === 'kn' ? 'ಮಾಹಿತಿ ಲೋಡ್ ಆಗುತ್ತಿದೆ...' : 'Loading data...'}
+            </div>
+          ) : (
+            <>
+              {/* Darshan Tab View */}
+              {activeTab === 'darshan' && (
                 <div className="space-y-4">
-                  <div className="relative w-full h-[350px] rounded-2xl overflow-hidden border border-[#eedecb]">
-                    <Image src={darshan.image_url} alt="Deity View" fill className="object-cover" priority />
+                  <div className="border border-amber-200 rounded-xl bg-amber-50/50 p-5 text-center">
+                    <h3 className="text-amber-800 font-bold text-md mb-2">
+                      {language === 'kn' ? 'ಇಂದಿನ ದೈನಂದಿನ ದರ್ಶನ' : 'Today\'s Daily Darshan'}
+                    </h3>
+                    <div className="w-full h-48 bg-stone-200 rounded-lg mb-2 flex items-center justify-center text-stone-400 text-xs italic">
+                      [ Alankara Photo Placeholder ]
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <h3 className="text-2xl font-black text-[#4a1c1c]">{lang === 'en' ? darshan.title_en : darshan.title_kn}</h3>
-                    <p className="text-lg text-gray-800 font-bold bg-[#fdfbf7] p-3 rounded-xl border border-[#eedecb]/60">
-                      {lang === 'en' ? darshan.description_en : darshan.description_kn}
+                  
+                  <div className="border border-stone-200 rounded-xl p-4 bg-white space-y-2">
+                    <h4 className="font-bold text-stone-700 border-b pb-1 text-sm">
+                      {language === 'kn' ? 'ದೇವಸ್ಥಾನದ ಸಮಯ' : 'Temple Timings'}
+                    </h4>
+                    <p className="text-sm text-stone-600 flex justify-between">
+                      <span>{language === 'kn' ? 'ಬೆಳಿಗ್ಗೆ:' : 'Morning:'}</span>
+                      <span className="font-medium">6:00 AM - 11:30 AM</span>
+                    </p>
+                    <p className="text-sm text-stone-600 flex justify-between">
+                      <span>{language === 'kn' ? 'ಸಂಜೆ:' : 'Evening:'}</span>
+                      <span className="font-medium">5:30 PM - 8:30 PM</span>
                     </p>
                   </div>
                 </div>
-              ) : <p>{text[lang].noDarshan}</p>}
-            </section>
-
-            {/* TIMINGS CONTAINER EMBEDDED IN DARSHAN FOR EASY UTILITY */}
-            <section className="bg-white rounded-2xl p-5 border border-[#eedecb] space-y-1">
-              <h4 className="text-xs font-black text-gray-400 uppercase tracking-wider">{text[lang].timings}</h4>
-              <p className="text-base font-bold text-gray-700">{text[lang].morning}</p>
-              <p className="text-base font-bold text-gray-700">{text[lang].evening}</p>
-            </section>
-          </div>
-        )}
-
-        {/* VIEW 2: SEVA BOOKING TAB */}
-        {activeTab === 'sevas' && (
-          <div className="space-y-4 animate-fade-in">
-            <div className="px-1">
-              <h2 className="text-xl font-black text-[#4a1c1c]">{text[lang].sevaHeader}</h2>
-              <p className="text-sm text-gray-500 font-medium">{text[lang].sevaSub}</p>
-            </div>
-            <div className="grid grid-cols-1 gap-3">
-              {sevasList.map((seva) => (
-                <div key={seva.id} className="bg-white rounded-2xl p-4 border-2 border-[#eedecb] shadow-sm flex flex-col justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-black text-[#4a1c1c]">{lang === 'en' ? seva.name_en : seva.name_kn}</h3>
-                    <p className="text-md font-bold text-[#da7b34] mt-0.5">{text[lang].lblPrice}{seva.price}</p>
-                  </div>
-                  <button
-                    onClick={() => { setSelectedSeva(seva); setBookingSuccess(false); }}
-                    className="w-full bg-[#8c503a] hover:bg-[#a05f47] text-white font-black py-3.5 rounded-xl text-md shadow-sm"
-                  >
-                    {text[lang].btnBookNow}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* VIEW 3: EVENTS CALENDAR TAB */}
-        {activeTab === 'calendar' && (
-          <div className="bg-white rounded-3xl p-5 shadow-sm border-2 border-[#eedecb] space-y-3 animate-fade-in">
-            <h2 className="text-lg font-black text-[#4a1c1c] tracking-tight mb-2">
-              {text[lang].calendarHeader}
-            </h2>
-            <div className="space-y-2.5">
-              {events.length > 0 ? (
-                events.map((event) => (
-                  <div 
-                    key={event.id}
-                    className={`flex items-center gap-4 p-3 rounded-2xl border ${
-                      event.is_major_festival ? 'bg-amber-50/60 border-amber-200' : 'bg-[#faf6f0]/40 border-gray-100'
-                    }`}
-                  >
-                    <div className="bg-[#4a1c1c] text-[#f7efe5] rounded-xl py-2 px-3 text-center min-w-[75px]">
-                      <span className="block text-xs font-bold uppercase opacity-90">
-                        {new Date(event.event_date).toLocaleDateString(lang === 'en' ? 'en-US' : 'kn-IN', { month: 'short' })}
-                      </span>
-                      <span className="block text-xl font-black">{new Date(event.event_date).getDate()}</span>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className={`text-lg font-bold leading-tight ${event.is_major_festival ? 'text-[#4a1c1c] font-black' : 'text-gray-800'}`}>
-                        {lang === 'en' ? event.title_en : event.title_kn}
-                      </h3>
-                      <p className="text-xs text-gray-500 font-semibold mt-0.5">{formatDate(event.event_date)}</p>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-gray-400 font-bold text-center py-4">{text[lang].noEvents}</p>
               )}
-            </div>
-          </div>
-        )}
 
+              {/* Sevas List Tab View */}
+              {activeTab === 'sevas' && (
+                <div className="space-y-3">
+                  {sevas.map((seva) => (
+                    <div 
+                      key={seva.id} 
+                      className="border border-stone-200 rounded-xl p-4 flex justify-between items-center bg-white hover:border-amber-300 transition"
+                    >
+                      <div className="pr-2">
+                        <h4 className="font-bold text-stone-900 text-base">
+                          {language === 'kn' ? seva.name_kn : seva.name_en}
+                        </h4>
+                        <p className="text-amber-800 font-semibold text-sm mt-0.5">₹{seva.price}</p>
+                      </div>
+                      <button
+                        onClick={() => setSelectedSeva(seva)}
+                        className="bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-sm transition shrink-0"
+                      >
+                        {language === 'kn' ? 'ಬುಕ್ ಮಾಡಿ' : 'Book'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* MVP Events Calendar Tab View */}
+              {activeTab === 'calendar' && (
+                <div className="space-y-3">
+                  {events.map((event) => (
+                    <div 
+                      key={event.id}
+                      className={`border rounded-xl p-4 shadow-sm transition ${
+                        event.is_major_festival 
+                          ? 'border-amber-300 bg-amber-50/70 border-l-4 border-l-amber-600' 
+                          : 'border-stone-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-1.5">
+                        <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                          event.is_major_festival ? 'bg-amber-600 text-white' : 'bg-stone-100 text-stone-600'
+                        }`}>
+                          {new Date(event.event_date).toLocaleDateString(language === 'kn' ? 'kn-IN' : 'en-IN', {
+                            day: 'numeric', month: 'short', year: 'numeric'
+                          })}
+                        </span>
+                        {event.is_major_festival && (
+                          <span className="text-[10px] uppercase tracking-wider font-extrabold text-amber-700 animate-pulse bg-amber-100 px-1.5 py-0.5 rounded">
+                            {language === 'kn' ? 'ವಿಶೇಷ ಉತ್ಸವ' : 'Major Festival'}
+                          </span>
+                        )}
+                      </div>
+                      <h4 className={`text-base font-bold ${event.is_major_festival ? 'text-amber-900' : 'text-stone-900'}`}>
+                        {language === 'kn' ? event.title_kn : event.title_en}
+                      </h4>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </main>
 
-      {/* SANKALPA DRAWER MODAL OVERLAY */}
+      {/* Booking Interactive Drawer / Modal Overlay */}
       {selectedSeva && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end justify-center z-50">
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 border-t-4 border-[#4a1c1c] max-h-[90vh] overflow-y-auto space-y-4">
-            <div className="flex justify-between items-start border-b border-gray-100 pb-3">
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center p-0 overflow-y-auto backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white w-full max-w-md rounded-t-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto shadow-2xl pb-10">
+            <div className="flex justify-between items-start border-b pb-3">
               <div>
-                <span className="bg-orange-50 text-[#da7b34] text-xs font-black px-2.5 py-1 rounded-md uppercase">Booking Seva</span>
-                <h3 className="text-xl font-black text-[#4a1c1c] mt-1">{lang === 'en' ? selectedSeva.name_en : selectedSeva.name_kn}</h3>
-                <p className="text-md font-bold text-gray-500">{text[lang].lblPrice}{selectedSeva.price}</p>
+                <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                  {language === 'kn' ? 'ಸಂಕಲ್ಪ ವಿವರಗಳು' : 'Sankalpa Registration'}
+                </span>
+                <h3 className="text-lg font-bold text-stone-900 mt-1">
+                  {language === 'kn' ? selectedSeva.name_kn : selectedSeva.name_en}
+                </h3>
               </div>
-              <button onClick={() => setSelectedSeva(null)} className="text-gray-400 text-2xl font-black px-2">×</button>
+              <button 
+                onClick={resetForm}
+                className="text-stone-400 hover:text-stone-600 text-xl font-bold bg-stone-100 h-8 w-8 rounded-full flex items-center justify-center transition"
+              >
+                ✕
+              </button>
             </div>
 
-            {bookingSuccess ? (
-              <div className="text-center py-8 space-y-4">
-                <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-3xl font-bold mx-auto">✓</div>
-                <p className="text-lg font-bold text-green-800 px-2">{text[lang].msgSuccess}</p>
-                <button onClick={() => setSelectedSeva(null)} className="bg-gray-800 text-white font-bold py-2.5 px-6 rounded-xl text-sm">{text[lang].btnClose}</button>
+            {bookingStatus === 'success' ? (
+              <div className="text-center py-6 space-y-3">
+                <div className="w-16 h-16 bg-green-100 rounded-full mx-auto flex items-center justify-center text-green-600 text-2xl font-bold">✓</div>
+                <h4 className="text-xl font-bold text-green-700">
+                  {language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ವಿನಂತಿ ಸಲ್ಲಿಕೆಯಾಗಿದೆ!' : 'Booking Requested!'}
+                </h4>
+                <p className="text-sm text-stone-600 px-4">
+                  {language === 'kn' 
+                    ? 'ನಿಮ್ಮ ಯುಪಿಐ ಪಾವತಿ ವಿನಂತಿಯನ್ನು ಪರಿಶೀಲನೆಗಾಗಿ ಸ್ವೀಕರಿಸಲಾಗಿದೆ. ದೇವಸ್ಥಾನದ ಆಡಳಿತ ಮಂಡಳಿಯು ಖಚಿತಪಡಿಸಿದ ನಂತರ ನವೀಕರಿಸಲಾಗುತ್ತದೆ.' 
+                    : 'Your transaction was saved successfully. Temple management will verify the reference code against bank receipts shortly.'}
+                </p>
+                <button 
+                  onClick={resetForm}
+                  className="w-full bg-stone-800 text-white font-bold py-2.5 rounded-xl text-sm shadow mt-2"
+                >
+                  {language === 'kn' ? 'ಮುಚ್ಚಿ' : 'Close'}
+                </button>
               </div>
             ) : (
-              <form onSubmit={handleSevaSubmit} className="space-y-4">
-                <h4 className="text-sm font-black text-gray-400 uppercase tracking-wider">{text[lang].formHeader}</h4>
+              <form onSubmit={handleBookingSubmit} className="space-y-4">
+                {/* Input Elements */}
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">{text[lang].lblName}</label>
-                  <input type="text" required placeholder="e.g. Ramesh Kumar" value={devoteeName} onChange={(e) => setDevoteeName(e.target.value)} className="w-full px-4 py-3 rounded-xl border-2 border-[#eedecb] text-base font-medium focus:outline-none focus:border-[#4a1c1c]" />
+                  <label className="block text-xs font-bold text-stone-600 mb-1">
+                    {language === 'kn' ? 'ಭಕ್ತರ ಹೆಸರು *' : 'Devotee Name *'}
+                  </label>
+                  <input 
+                    type="text" required value={devoteeName} onChange={(e) => setDevoteeName(e.target.value)}
+                    placeholder="Enter full name"
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-600"
+                  />
                 </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">{text[lang].lblGothra}</label>
-                    <input type="text" placeholder="e.g. Shiva" value={gothra} onChange={(e) => setGothra(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-[#eedecb] text-base" />
+                    <label className="block text-xs font-bold text-stone-600 mb-1">
+                      {language === 'kn' ? 'ಗೋತ್ರ' : 'Gothra'}
+                    </label>
+                    <input 
+                      type="text" value={gothra} onChange={(e) => setGothra(e.target.value)}
+                      placeholder="e.g., Shiva"
+                      className="w-full border border-stone-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-600"
+                    />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">{text[lang].lblRashi}</label>
-                    <input type="text" placeholder="e.g. Simha" value={rashi} onChange={(e) => setRashi(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-[#eedecb] text-base" />
+                    <label className="block text-xs font-bold text-stone-600 mb-1">
+                      {language === 'kn' ? 'ರಾಶಿ' : 'Rashi'}
+                    </label>
+                    <input 
+                      type="text" value={rashi} onChange={(e) => setRashi(e.target.value)}
+                      placeholder="e.g., Mesha"
+                      className="w-full border border-stone-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-600"
+                    />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">{text[lang].lblDate}</label>
-                  <input type="date" required value={sankalpaDate} onChange={(e) => setSankalpaDate(e.target.value)} className="w-full px-4 py-3 rounded-xl border-2 border-[#eedecb] text-base font-medium focus:outline-none focus:border-[#4a1c1c]" />
+
+                {/* Automation Payment Trigger Block */}
+                <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3">
+                  <div className="flex justify-between text-sm font-bold text-stone-700">
+                    <span>{language === 'kn' ? 'ಸೇವೆ ಶುಲ್ಕ:' : 'Total Amount:'}</span>
+                    <span className="text-amber-800 text-base">₹{selectedSeva.price}</span>
+                  </div>
+
+                  {!paymentInitiated ? (
+                    <button
+                      type="button"
+                      onClick={triggerUPIPayment}
+                      className="w-full bg-amber-700 hover:bg-amber-800 text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition"
+                    >
+                      📲 {language === 'kn' ? 'ಯುಪಿಐ ಆಪ್ ಮೂಲಕ ನೇರ ಪಾವತಿ' : 'Pay Directly via Mobile UPI App'}
+                    </button>
+                  ) : (
+                    <div className="text-xs text-green-700 bg-green-50 border border-green-200 p-2.5 rounded-lg text-center font-medium">
+                      {language === 'kn' ? '✅ ಯುಪಿಐ ಪಾವತಿ ಪ್ರಕ್ರಿಯೆ ಪ್ರಾರಂಭಿಸಲಾಗಿದೆ' : '✅ UPI Payment application triggered'}
+                    </div>
+                  )}
                 </div>
-                <button type="submit" disabled={bookingLoading} className="w-full bg-[#4a1c1c] text-white font-black text-lg py-4 rounded-xl shadow-md disabled:opacity-50">
-                  {bookingLoading ? 'Verifying UPI Wallet...' : text[lang].btnPaySubmit}
-                </button>
+
+                {/* Manual Reference Collection Step */}
+                {paymentInitiated && (
+                  <div className="space-y-2 pt-2 border-t border-dashed border-stone-200">
+                    <label className="block text-xs font-bold text-stone-600">
+                      {language === 'kn' ? 'ಯುಪಿಐ ಟ್ರಾನ್ಸಾಕ್ಷನ್ ಐಡಿ (ಕೊನೆಯ ೪ ಅಥವಾ ೧೨ ಅಂಕಿಗಳು) *' : 'UPI Transaction Ref Reference ID *'}
+                    </label>
+                    <input 
+                      type="text" required value={transactionId} onChange={(e) => setTransactionId(e.target.value)}
+                      placeholder="e.g., 6142xxxx or Ref No."
+                      className="w-full border border-stone-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-600 bg-amber-50/40"
+                    />
+                    <p className="text-[10px] text-stone-500 leading-relaxed">
+                      {language === 'kn' 
+                        ? 'ಪಾವತಿ ಪೂರ್ಣಗೊಂಡ ನಂತರ ನಿಮ್ಮ ಜಿಪೇ/ಫೋನ್‌ಪೇನಲ್ಲಿ ಕಾಣಿಸುವ ಸಂಖ್ಯೆಯನ್ನು ಇಲ್ಲಿ ನಮೂದಿಸಿ ಬುಕಿಂಗ್ ಪೂರ್ಣಗೊಳಿಸಿ.' 
+                        : 'After making the transfer inside your banking application, type the resulting settlement ID here to finalize your database record.'}
+                    </p>
+
+                    <button
+                      type="submit"
+                      disabled={bookingStatus === 'submitting'}
+                      className="w-full bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-white font-bold py-3 rounded-xl shadow-lg text-sm mt-2 transition"
+                    >
+                      {bookingStatus === 'submitting' 
+                        ? (language === 'kn' ? 'ಸಲ್ಲಿಸಲಾಗುತ್ತಿದೆ...' : 'Submitting Reference...') 
+                        : (language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ಕನ್ಫರ್ಮ್ ಮಾಡಿ' : 'Confirm Registration')}
+                    </button>
+                  </div>
+                )}
               </form>
             )}
           </div>
         </div>
       )}
 
-      {/* FIXED BOTTOM EMBEDDED UTILITIES */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#eedecb] shadow-md px-4 py-3 z-30">
-        <div className="max-w-md mx-auto grid grid-cols-2 gap-3">
-          <a href="http://googleusercontent.com/maps.google.com/4" target="_blank" rel="noopener noreferrer" className="bg-[#da7b34] text-white font-black text-center text-md py-3.5 rounded-xl flex items-center justify-center">{text[lang].btnMap}</a>
-          <a href="tel:+919876543210" className="bg-[#4a1c1c] text-white font-black text-center text-md py-3.5 rounded-xl flex items-center justify-center">{text[lang].btnCall}</a>
-        </div>
-      </div>
-
+      {/* Persistent Bottom Bar */}
+      <footer className="fixed bottom-0 left-0 right-0 bg-stone-900 text-stone-400 text-[11px] text-center py-2 max-w-md mx-auto z-30 border-t border-stone-800">
+        © 2026 Sri Gowrishankara Temple Trustees. Built with Next.js & Supabase Engine.
+      </footer>
     </div>
   );
 }
