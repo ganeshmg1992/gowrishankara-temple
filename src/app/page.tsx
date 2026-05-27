@@ -86,10 +86,8 @@ export default function Home() {
   // Safe Deep-Link Constructor (No pre-filled amounts to satisfy personal bank protocols)
   const getUpiUrl = () => {
     if (!selectedSeva) return '#';
-    const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
-    const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
-    const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 35);
-    return `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&cu=INR&tn=${encodeURIComponent(txNote)}`;
+    return `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}`;
+  };
   };
 
   const handleRegistration = async (e: React.FormEvent) => {
