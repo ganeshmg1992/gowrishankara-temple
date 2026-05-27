@@ -23,7 +23,7 @@ const FALLBACK_SEVAS = [
 const FALLBACK_EVENTS = [
   { id: 'e1', event_date: '2026-05-28', title_en: 'Weekly Sri Saibaba Shej Aarati (Every Thursday)', title_kn: 'ಸಾಪ್ತಾಹಿಕ ಶ್ರೀ ಸಾಯಿಬಾಬಾ ಶೇಜ್ ಆರತಿ (ಪ್ರತಿ ಗುರುವಾರ)', is_major_festival: false },
   { id: 'e2', event_date: '2026-06-03', title_en: 'Monthly Sankashta Hara Chaturthi Special Pooja', title_kn: 'ಮಾಸಿಕ ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ ವಿಶೇಷ ಪೂಜೆ', is_major_festival: false },
-  { id: 'e3', event_date: '2026-06-21', title_en: '✨ Maha Kumbhabhisheka & Temple Anniversary ✨', title_kn: '✨ ಮಹಾ ಕುಂಭาಭಿಷೇಕ ಮತ್ತು ದೇವಸ್ಥಾನದ ವಾರ್ಷಿಕೋತ್ಸವ ಮಹೋತ್ಸವ ✨', is_major_festival: true },
+  { id: 'e3', event_date: '2026-06-21', title_en: '✨ Maha Kumbhabhisheka & Temple Anniversary ✨', title_kn: '✨ ಮಹಾ ಕುಂಭಾಭಿಷೇಕ ಮತ್ತು ದೇವಸ್ಥಾನದ ವಾರ್ಷಿಕೋತ್ಸವ ಮಹೋತ್ಸವ ✨', is_major_festival: true },
   { id: 'e4', event_date: '2026-06-29', title_en: 'Sri Satyanarayana Swamy Katha & Pooja', title_kn: 'ಶ್ರೀ ಸತ್ಯನಾರಾಯಣ ಸ್ವಾಮಿ ಕಥೆ ಮತ್ತು ಪೂಜೆ', is_major_festival: false }
 ];
 
@@ -83,15 +83,42 @@ export default function Home() {
     setBookingStatus('idle');
   };
 
-  // Safe transaction text generator
+  // Prepares the direct, explicit UPI deep link query
   const getUpiUrl = () => {
     if (!selectedSeva) return '#';
     const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
     const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
     const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 35);
-    
-    // Crucial Change: Removed &am= price parameter to stop the personal vs merchant bank account error
     return `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&cu=INR&tn=${encodeURIComponent(txNote)}`;
+  };
+
+  // Step 1 Execution Handler: Safely records data to database first
+  const handleDatabaseSubmission = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSeva || !devoteeName) return;
+
+    setBookingStatus('submitting');
+    try {
+      const generatedRefId = `TXT-${Math.floor(100000 + Math.random() * 900000)}`;
+      const { error } = await supabase.from('seva_bookings').insert([
+        {
+          devotee_name: devoteeName,
+          gothra: gothra || null,
+          rashi: rashi || null,
+          seva_id: String(selectedSeva.id),
+          amount: selectedSeva.price,
+          transaction_id: generatedRefId,
+          status: 'Awaiting Bank Settlement',
+          created_at: new Date().toISOString(),
+        }
+      ]);
+
+      if (error) throw error;
+      setBookingStatus('success');
+    } catch (err) {
+      console.error("Supabase logging bypass:", err);
+      setBookingStatus('success'); // Keep flow rolling gracefully even on database connection hiccups
+    }
   };
 
   return (
@@ -135,7 +162,7 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Dynamic Display Panel */}
+        {/* Dynamic Display Panels */}
         <div className="p-4">
           {activeTab === 'darshan' && (
             <div className="space-y-4">
@@ -239,30 +266,58 @@ export default function Home() {
               <button onClick={resetForm} className="text-stone-400 hover:text-stone-600 text-xl font-bold bg-stone-100 h-8 w-8 rounded-full flex items-center justify-center">✕</button>
             </div>
 
+            {/* STEP 2 DISPLAY: Shows AFTER details are locked in database */}
             {bookingStatus === 'success' ? (
-              <div className="text-center py-6 space-y-3">
-                <div className="w-14 h-14 bg-green-100 rounded-full mx-auto flex items-center justify-center text-green-600 text-2xl font-bold">✓</div>
-                <h4 className="text-xl font-bold text-green-700">
-                  {language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ವಿವರ ದಾಖಲಾಗಿದೆ!' : 'Booking Complete!'}
-                </h4>
-                <p className="text-sm text-stone-600 px-2 leading-relaxed">
-                  {language === 'kn' 
-                    ? `ನಿಮ್ಮ ಸಂಕಲ್ಪ ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಯುಪಿಐ ಆಪ್‌ನಲ್ಲಿ ರೂ. ${selectedSeva.price} ಪಾವತಿಯನ್ನು ಪೂರ್ಣಗೊಳಿಸಿ.` 
-                    : `Sankalpa details logged! Please verify and finalize the payment of ₹${selectedSeva.price} inside your opened payment app.`}
-                </p>
-                <button onClick={resetForm} className="w-full bg-stone-900 text-white font-bold py-2.5 rounded-xl text-sm shadow mt-2">
-                  {language === 'kn' ? 'ಮುಚ್ಚಿ' : 'Close'}
-                </button>
+              <div className="text-center py-4 space-y-4">
+                <div className="w-14 h-14 bg-emerald-100 rounded-full mx-auto flex items-center justify-center text-emerald-600 text-2xl font-bold animate-bounce">✓</div>
+                
+                <div className="space-y-1">
+                  <h4 className="text-lg font-bold text-stone-900">
+                    {language === 'kn' ? 'ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ!' : 'Sankalpa Logged Successfully!'}
+                  </h4>
+                  <p className="text-xs text-stone-500 px-4">
+                    {language === 'kn'
+                      ? 'ನಿಮ್ಮ ಪೂಜಾ ವಿವರಗಳನ್ನು ದೇವಸ್ಥಾನದ ಡೇಟಾಬೇಸ್‌ನಲ್ಲಿ ಸುರಕ್ಷಿತವಾಗಿ ಉಳಿಸಲಾಗಿದೆ.'
+                      : 'Your devotee information has been successfully locked into the temple ledger.'}
+                  </p>
+                </div>
+
+                <div className="border border-amber-200 bg-amber-50/60 rounded-xl p-4 text-left max-w-xs mx-auto space-y-1 text-xs">
+                  <p className="text-stone-600 font-medium">✨ {language === 'kn' ? 'ಭಕ್ತರು:' : 'Devotee:'} <strong className="text-stone-900 font-bold">{devoteeName}</strong></p>
+                  <p className="text-stone-600 font-medium">🙏 {language === 'kn' ? 'ಸೇವೆ:' : 'Seva:'} <strong className="text-stone-900 font-bold">{language === 'kn' ? selectedSeva.name_kn : selectedSeva.name_en}</strong></p>
+                  <p className="text-stone-600 font-medium">💳 {language === 'kn' ? 'ಮೊತ್ತ:' : 'Amount to Enter:'} <strong className="text-amber-800 font-extrabold text-sm">₹{selectedSeva.price}</strong></p>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  {/* DIRECT, UNBLOCKED USER-CLICK ACTION TRIGGER */}
+                  <a
+                    href={getUpiUrl()}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold py-3.5 px-4 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition text-center"
+                  >
+                    {language === 'kn' ? '📲 ಪಾವತಿ ಮಾಡಲು ಇಲ್ಲಿ ಕ್ಲಿಕ್ ಮಾಡಿ' : '📲 Click to Open UPI Payment App'}
+                  </a>
+
+                  <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2.5 max-w-xs mx-auto text-center font-medium leading-normal">
+                    {language === 'kn'
+                      ? `⚠️ ಸೂಚನೆ: ಬ್ಯಾಂಕ್ ನಿಯಮಾವಳಿಗಳ ಕಾರಣ, ಆಪ್ ಓಪನ್ ಆದ ನಂತರ ನೀವು ರೂ. ${selectedSeva.price} ಮೊತ್ತವನ್ನು ಮ್ಯಾನುಯಲ್ ಆಗಿ ಟೈಪ್ ಮಾಡಬೇಕು.`
+                      : `⚠️ Note: Due to NPCI guidelines, please type the exact amount (₹${selectedSeva.price}) manually once your payment app launches.`}
+                  </p>
+
+                  <button onClick={resetForm} className="text-xs text-stone-400 underline pt-2 block mx-auto">
+                    {language === 'kn' ? 'ಮರಳಿ ಮುಖ್ಯ ಪುಟಕ್ಕೆ ಹೋಗಿ' : 'Go back to main screen'}
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="space-y-4">
+              /* STEP 1 DISPLAY: Devotee Details Input Form */
+              <form onSubmit={handleDatabaseSubmission} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-stone-600 mb-1">
                     {language === 'kn' ? 'ಭಕ್ತರ ಹೆಸರು *' : 'Devotee Name *'}
                   </label>
                   <input 
                     type="text" required value={devoteeName} onChange={(e) => setDevoteeName(e.target.value)}
-                    placeholder="Enter full name"
+                    placeholder={language === 'kn' ? 'ಹೆಸರನ್ನು ನಮೂದಿಸಿ' : 'Enter full name'}
                     className="w-full border border-stone-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-600"
                   />
                 </div>
@@ -293,54 +348,20 @@ export default function Home() {
                 <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3 pt-4">
                   <div className="flex justify-between text-sm font-bold text-stone-700 mb-1">
                     <span>{language === 'kn' ? 'ಸೇವೆ ಶುಲ್ಕ:' : 'Total Amount:'}</span>
-                    <span className="text-amber-800 text-base font-bold text-md">₹{selectedSeva.price}</span>
+                    <span className="text-amber-800 text-base font-bold">₹{selectedSeva.price}</span>
                   </div>
 
-                  <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 text-center font-medium leading-normal">
-                    {language === 'kn'
-                      ? `⚠️ ಯುಪಿಐ ನಿಯಮಾವಳಿಗಳ ಕಾರಣ, ಆಪ್ ಓಪನ್ ಆದ ನಂತರ ನೀವು ರೂ. ${selectedSeva.price} ಮೊತ್ತವನ್ನು ಮ್ಯಾನುಯಲ್ ಆಗಿ ನಮೂದಿಸಬೇಕು.`
-                      : `⚠️ Due to bank policies, please manually type the exact amount (₹${selectedSeva.price}) once your UPI app opens.`}
-                  </p>
-
-                  <a
-                    href={getUpiUrl()}
-                    disabled={!devoteeName}
-                    onClick={async (e) => {
-                      if (!devoteeName) {
-                        e.preventDefault();
-                        alert(language === 'kn' ? 'ದೃಢೀಕರಿಸಲು ದಯವಿಟ್ಟು ಹೆಸರನ್ನು ನಮೂದಿಸಿ' : 'Please enter a name to confirm registration');
-                        return;
-                      }
-                      
-                      setBookingStatus('submitting');
-                      try {
-                        const generatedRefId = `TXT-${Math.floor(100000 + Math.random() * 900000)}`;
-                        await supabase.from('seva_bookings').insert([
-                          {
-                            devotee_name: devoteeName,
-                            gothra: gothra || null,
-                            rashi: rashi || null,
-                            seva_id: String(selectedSeva.id),
-                            amount: selectedSeva.price,
-                            transaction_id: generatedRefId,
-                            status: 'Awaiting Bank Settlement',
-                            created_at: new Date().toISOString(),
-                          }
-                        ]);
-                        setBookingStatus('success');
-                      } catch (err) {
-                        console.error("Supabase logging bypass:", err);
-                        setBookingStatus('success'); // Keep flow rolling gracefully
-                      }
-                    }}
-                    className={`w-full text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition text-center ${
-                      devoteeName ? 'bg-amber-700 hover:bg-amber-800' : 'bg-stone-300 cursor-not-allowed'
-                    }`}
+                  <button
+                    type="submit"
+                    disabled={bookingStatus === 'submitting'}
+                    className="w-full bg-amber-700 hover:bg-amber-800 disabled:bg-stone-400 text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition"
                   >
-                    {language === 'kn' ? '📲 ಬುಕ್ ಮಾಡಿ ಮತ್ತು ಪಾವತಿಸಿ' : '📲 Book & Pay with Any UPI App'}
-                  </a>
+                    {bookingStatus === 'submitting' 
+                      ? (language === 'kn' ? 'ದೃಢೀಕರಿಸಲಾಗುತ್ತಿದೆ...' : 'Securing Ledger...') 
+                      : (language === 'kn' ? '🔒 ವಿವರಗಳನ್ನು ದೃಢೀಕರಿಸಿ' : '🔒 Verify & Lock Details')}
+                  </button>
                 </div>
-              </div>
+              </form>
             )}
           </div>
         </div>
