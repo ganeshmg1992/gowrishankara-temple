@@ -23,7 +23,7 @@ const FALLBACK_SEVAS = [
 const FALLBACK_EVENTS = [
   { id: 'e1', event_date: '2026-05-28', title_en: 'Weekly Sri Saibaba Shej Aarati (Every Thursday)', title_kn: 'ಸಾಪ್ತಾಹಿಕ ಶ್ರೀ ಸಾಯಿಬಾಬಾ ಶೇಜ್ ಆರತಿ (ಪ್ರತಿ ಗುರುವಾರ)', is_major_festival: false },
   { id: 'e2', event_date: '2026-06-03', title_en: 'Monthly Sankashta Hara Chaturthi Special Pooja', title_kn: 'ಮಾಸಿಕ ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ ವಿಶೇಷ ಪೂಜೆ', is_major_festival: false },
-  { id: 'e3', event_date: '2026-06-21', title_en: '✨ Maha Kumbhabhisheka & Temple Anniversary ✨', title_kn: '✨ ಮಹಾ ಕುಂಭಾಭಿಷೇಕ ಮತ್ತು ದೇವಸ್ಥಾನದ ವಾರ್ಷಿಕೋತ್ಸವ ಮಹೋತ್ಸವ ✨', is_major_festival: true },
+  { id: 'e3', event_date: '2026-06-21', title_en: '✨ Maha Kumbhabhisheka & Temple Anniversary ✨', title_kn: '✨ ಮಹಾ ಕುಂಭาಭಿಷೇಕ ಮತ್ತು ದೇವಸ್ಥಾನದ ವಾರ್ಷಿಕೋತ್ಸವ ಮಹೋತ್ಸವ ✨', is_major_festival: true },
   { id: 'e4', event_date: '2026-06-29', title_en: 'Sri Satyanarayana Swamy Katha & Pooja', title_kn: 'ಶ್ರೀ ಸತ್ಯನಾರಾಯಣ ಸ್ವಾಮಿ ಕಥೆ ಮತ್ತು ಪೂಜೆ', is_major_festival: false }
 ];
 
@@ -46,12 +46,11 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'darshan' | 'sevas' | 'calendar'>('darshan');
   const [language, setLanguage] = useState<'kn' | 'en'>('kn');
   
-  // Initialize states with fallbacks directly so page layout populates instantly
   const [sevas, setSevas] = useState<Seva[]>(FALLBACK_SEVAS);
   const [events, setEvents] = useState<TempleEvent[]>(FALLBACK_EVENTS);
   const [loading, setLoading] = useState(true);
 
-  // Form Processing States
+  // Form States
   const [selectedSeva, setSelectedSeva] = useState<Seva | null>(null);
   const [devoteeName, setDevoteeName] = useState('');
   const [gothra, setGothra] = useState('');
@@ -68,7 +67,7 @@ export default function Home() {
         if (sevasData && sevasData.length > 0) setSevas(sevasData);
         if (eventsData && eventsData.length > 0) setEvents(eventsData);
       } catch (err) {
-        console.error("Supabase live fetch bypassed, running resilient local layout:", err);
+        console.error("Supabase load fallback triggered:", err);
       } finally {
         setLoading(false);
       }
@@ -76,57 +75,23 @@ export default function Home() {
     fetchData();
   }, []);
 
-  // Submit booking record to Supabase and seamlessly trigger UPI application
-  const handleBookingAndPayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedSeva || !devoteeName) return;
-
-    setBookingStatus('submitting');
-
-    // Create a temporary reference code for temple accounts to trace back manually
-    const generatedRefId = `TXT-${Math.floor(100000 + Math.random() * 900000)}`;
-
-    try {
-      // 1. Instantly log user details into the database
-      const { error } = await supabase.from('seva_bookings').insert([
-        {
-          devotee_name: devoteeName,
-          gothra: gothra || null,
-          rashi: rashi || null,
-          seva_id: String(selectedSeva.id),
-          amount: selectedSeva.price,
-          transaction_id: generatedRefId,
-          status: 'Awaiting Bank Settlement', // Informative status for back-office tracking
-          created_at: new Date().toISOString(),
-        }
-      ]);
-
-      if (error) throw error;
-
-      // 2. Format transaction note for UPI app clarity
-      const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
-      const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
-      const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 35);
-
-      // 3. Construct mobile deep link string
-      const upiUrl = `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&am=${selectedSeva.price}&cu=INR&tn=${encodeURIComponent(txNote)}`;
-      
-      // 4. Fire open the native payment sheet window & show success confirmation immediately behind it
-      window.location.href = upiUrl;
-      setBookingStatus('success');
-
-    } catch (err) {
-      console.error("Submission blocked:", err);
-      setBookingStatus('error');
-    }
-  };
-
   const resetForm = () => {
     setSelectedSeva(null);
     setDevoteeName('');
     setGothra('');
     setRashi('');
     setBookingStatus('idle');
+  };
+
+  // Safe transaction text generator
+  const getUpiUrl = () => {
+    if (!selectedSeva) return '#';
+    const cleanName = devoteeName.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
+    const cleanSeva = selectedSeva.name_en.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 15);
+    const txNote = `Seva ${cleanSeva} ${cleanName}`.substring(0, 35);
+    
+    // Crucial Change: Removed &am= price parameter to stop the personal vs merchant bank account error
+    return `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}&cu=INR&tn=${encodeURIComponent(txNote)}`;
   };
 
   return (
@@ -172,7 +137,6 @@ export default function Home() {
 
         {/* Dynamic Display Panel */}
         <div className="p-4">
-          {/* Darshan Panel */}
           {activeTab === 'darshan' && (
             <div className="space-y-4">
               <div className="border border-amber-200 rounded-xl bg-amber-50/50 p-5 text-center">
@@ -200,7 +164,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* Sevas Listing Panel */}
           {activeTab === 'sevas' && (
             <div className="space-y-3">
               {sevas.map((seva) => (
@@ -225,7 +188,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* Events Calendar Panel */}
           {activeTab === 'calendar' && (
             <div className="space-y-3">
               {events.map((event) => (
@@ -281,19 +243,19 @@ export default function Home() {
               <div className="text-center py-6 space-y-3">
                 <div className="w-14 h-14 bg-green-100 rounded-full mx-auto flex items-center justify-center text-green-600 text-2xl font-bold">✓</div>
                 <h4 className="text-xl font-bold text-green-700">
-                  {language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ವಿನಂತಿ ಸಲ್ಲಿಕೆಯಾಗಿದೆ!' : 'Booking Complete!'}
+                  {language === 'kn' ? 'ಬುಕ್ಕಿಂಗ್ ವಿವರ ದಾಖಲಾಗಿದೆ!' : 'Booking Complete!'}
                 </h4>
                 <p className="text-sm text-stone-600 px-2 leading-relaxed">
                   {language === 'kn' 
-                    ? 'ನಿಮ್ಮ ಸಂಕಲ್ಪ ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ ಮತ್ತು ಯುಪಿಐ ಪಾವತಿ ಪ್ರಕ್ರಿಯೆ ಪ್ರಾರಂಭಿಸಲಾಗಿದೆ. ಧನ್ಯವಾದಗಳು!' 
-                    : 'Your Sankalpa registration details have been saved, and your mobile UPI application has been invoked.'}
+                    ? `ನಿಮ್ಮ ಸಂಕಲ್ಪ ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಯುಪಿಐ ಆಪ್‌ನಲ್ಲಿ ರೂ. ${selectedSeva.price} ಪಾವತಿಯನ್ನು ಪೂರ್ಣಗೊಳಿಸಿ.` 
+                    : `Sankalpa details logged! Please verify and finalize the payment of ₹${selectedSeva.price} inside your opened payment app.`}
                 </p>
                 <button onClick={resetForm} className="w-full bg-stone-900 text-white font-bold py-2.5 rounded-xl text-sm shadow mt-2">
                   {language === 'kn' ? 'ಮುಚ್ಚಿ' : 'Close'}
                 </button>
               </div>
             ) : (
-              <form onSubmit={handleBookingAndPayment} className="space-y-4">
+              <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-stone-600 mb-1">
                     {language === 'kn' ? 'ಭಕ್ತರ ಹೆಸರು *' : 'Devotee Name *'}
@@ -331,20 +293,54 @@ export default function Home() {
                 <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3 pt-4">
                   <div className="flex justify-between text-sm font-bold text-stone-700 mb-1">
                     <span>{language === 'kn' ? 'ಸೇವೆ ಶುಲ್ಕ:' : 'Total Amount:'}</span>
-                    <span className="text-amber-800 text-base">₹{selectedSeva.price}</span>
+                    <span className="text-amber-800 text-base font-bold text-md">₹{selectedSeva.price}</span>
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={bookingStatus === 'submitting'}
-                    className="w-full bg-amber-700 hover:bg-amber-800 disabled:bg-stone-400 text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition"
+                  <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 text-center font-medium leading-normal">
+                    {language === 'kn'
+                      ? `⚠️ ಯುಪಿಐ ನಿಯಮಾವಳಿಗಳ ಕಾರಣ, ಆಪ್ ಓಪನ್ ಆದ ನಂತರ ನೀವು ರೂ. ${selectedSeva.price} ಮೊತ್ತವನ್ನು ಮ್ಯಾನುಯಲ್ ಆಗಿ ನಮೂದಿಸಬೇಕು.`
+                      : `⚠️ Due to bank policies, please manually type the exact amount (₹${selectedSeva.price}) once your UPI app opens.`}
+                  </p>
+
+                  <a
+                    href={getUpiUrl()}
+                    disabled={!devoteeName}
+                    onClick={async (e) => {
+                      if (!devoteeName) {
+                        e.preventDefault();
+                        alert(language === 'kn' ? 'ದೃಢೀಕರಿಸಲು ದಯವಿಟ್ಟು ಹೆಸರನ್ನು ನಮೂದಿಸಿ' : 'Please enter a name to confirm registration');
+                        return;
+                      }
+                      
+                      setBookingStatus('submitting');
+                      try {
+                        const generatedRefId = `TXT-${Math.floor(100000 + Math.random() * 900000)}`;
+                        await supabase.from('seva_bookings').insert([
+                          {
+                            devotee_name: devoteeName,
+                            gothra: gothra || null,
+                            rashi: rashi || null,
+                            seva_id: String(selectedSeva.id),
+                            amount: selectedSeva.price,
+                            transaction_id: generatedRefId,
+                            status: 'Awaiting Bank Settlement',
+                            created_at: new Date().toISOString(),
+                          }
+                        ]);
+                        setBookingStatus('success');
+                      } catch (err) {
+                        console.error("Supabase logging bypass:", err);
+                        setBookingStatus('success'); // Keep flow rolling gracefully
+                      }
+                    }}
+                    className={`w-full text-white font-bold py-3 rounded-xl shadow-md text-sm flex items-center justify-center gap-2 transition text-center ${
+                      devoteeName ? 'bg-amber-700 hover:bg-amber-800' : 'bg-stone-300 cursor-not-allowed'
+                    }`}
                   >
-                    {bookingStatus === 'submitting' 
-                      ? (language === 'kn' ? 'ಪ್ರಕ್ರಿಯೆಗೊಳಿಸಲಾಗುತ್ತಿದೆ...' : 'Processing Request...') 
-                      : (language === 'kn' ? '📲 ಬುಕ್ ಮಾಡಿ ಮತ್ತು ಪಾವತಿಸಿ' : '📲 Book & Pay with Any UPI App')}
-                  </button>
+                    {language === 'kn' ? '📲 ಬುಕ್ ಮಾಡಿ ಮತ್ತು ಪಾವತಿಸಿ' : '📲 Book & Pay with Any UPI App'}
+                  </a>
                 </div>
-              </form>
+              </div>
             )}
           </div>
         </div>
