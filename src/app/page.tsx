@@ -11,7 +11,7 @@ interface TempleEvent {
   title_en: string;
   title_kn: string;
   scenario_type: 'yearly' | 'monthly' | 'weekly'; 
-  category: string;                               // Aligned with the database schema rule
+  category: string;                               
   event_date: string;                             
   day_of_week: string | null;                     
 }
@@ -29,7 +29,7 @@ interface BookingRecord {
   id: string;
   type: string;
   devotee_name: string;
-  phone: string;
+  phone_number: string;
   nakshatra: string;
   gothra: string;
   service_title: string;
@@ -117,10 +117,7 @@ export default function TempleEngineApp() {
       if (error) throw error;
       
       if (data) {
-        // Exclude internal hidden operating markers
         const validFiles = data.filter(file => !file.name.startsWith('.'));
-
-        // Explicitly returning the values safely to initialize state correctly
         const urls = validFiles.map(file => {
           return supabase.storage.from('temple-assets').getPublicUrl(file.name).data.publicUrl;
         });
@@ -128,7 +125,6 @@ export default function TempleEngineApp() {
       }
     } catch (err) {
       console.error("Storage infrastructure pipeline disconnected:", err);
-      // Fallback asset paths if network configurations block loading
       setCarouselImages([
         'https://images.unsplash.com/photo-1609137144814-118c7f991f24?auto=format&fit=crop&w=1200&q=80',
         'https://images.unsplash.com/photo-1545128485-c400e7702796?auto=format&fit=crop&w=1200&q=80'
@@ -136,18 +132,16 @@ export default function TempleEngineApp() {
     }
   };
 
-  // Run initial loading on page mount
   useEffect(() => {
     syncCoreDatabaseEngine();
     fetchCarouselImages();
   }, []);
 
-  // Motorized automated loop handler to shift carousel slides seamlessly
   useEffect(() => {
     if (carouselImages.length === 0) return;
     const timer = setInterval(() => {
       setCurrentSlide((prev) => (prev + 1) % carouselImages.length);
-    }, 4000); // Transitions to next frame every 4 seconds
+    }, 4000); 
     return () => clearInterval(timer);
   }, [carouselImages]);
 
@@ -176,18 +170,20 @@ export default function TempleEngineApp() {
   };
 
   // ==========================================
-  // TRANSACTION MUTATION SUBMISSION HANDLERS
+  // UPI PAYMENT & DB SUBMISSION FLOW
   // ==========================================
   const processBookingTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!devoteeName.trim() || !phone.trim() || !checkoutItem) return;
 
     const txnId = 'TXN-' + Math.floor(100000 + Math.random() * 900000);
+
+    // 1. Commit registration log payload straight into Supabase
     const { error } = await supabase.from('bookings').insert([{
       id: txnId,
       type: checkoutItem.type,
       devotee_name: devoteeName,
-      phone: phone,
+      phone_number: phone, // Clean mapping targeting lowercase text column layout
       nakshatra: devoteeStar,
       gothra: devoteeGothra,
       service_title: checkoutItem.title,
@@ -195,16 +191,31 @@ export default function TempleEngineApp() {
     }]);
 
     if (error) {
-      alert(`Transaction pipeline failure: ${error.message}`);
-    } else {
-      alert(`✨ Payment Verified & Sankalpa Registered! ✨\nReceipt Nodes: ${txnId}\nBlessings tracked for ${devoteeName}.`);
-      setCheckoutItem(null);
-      setDevoteeName('');
-      setPhone('');
-      setDevoteeStar('');
-      setDevoteeGothra('');
-      syncCoreDatabaseEngine();
+      alert(`Transaction database pipeline failure: ${error.message}`);
+      return;
     }
+
+    // 2. Database transaction recorded, initialize automatic UPI Deep-Link
+    // ⚠️ REPLACE THIS STRING WITH THE TEMPLE'S ACTUAL UPI ID (VPA) BEFORE PUSHING LIVE
+    const upiId = "yourtempleupi@bank"; 
+    
+    const businessName = encodeURIComponent("Shree Gowrishankara Sainatha Temple");
+    const amount = checkoutItem.cost.toString();
+    const transactionNote = encodeURIComponent(`Sankalpa Seva: ${checkoutItem.title} - ${devoteeName}`);
+
+    // Standardized Indian Interoperable Intent String
+    const upiUrl = `upi://pay?pa=${upiId}&pn=${businessName}&am=${amount}&cu=INR&tn=${transactionNote}&tr=${txnId}`;
+
+    // Reset workflow states before executing interface route hop
+    setCheckoutItem(null);
+    setDevoteeName('');
+    setPhone('');
+    setDevoteeStar('');
+    setDevoteeGothra('');
+    syncCoreDatabaseEngine();
+
+    // 3. Fire layout intent overlay trigger to open phone apps instantly
+    window.location.href = upiUrl;
   };
 
   // ==========================================
@@ -278,7 +289,7 @@ export default function TempleEngineApp() {
             <h1 className="font-bold tracking-wide text-md sm:text-lg">
               {isKannada ? "ಶ್ರೀ ಗೌರಿ ಶಂಕರ ಸಾಯಿನಾಥ ದೇವಸ್ಥಾನ" : "Shree Gowrishankara Sainatha Temple"}
             </h1>
-            <p className="text-[10px] text-amber-200 tracking-wider uppercase font-medium">Chikkabanavara</p>
+            <p className="text-[10px] text-amber-200 tracking-wider uppercase font-medium">Bhattarahalli Complex Engine Node</p>
           </div>
         </div>
         <div className="flex items-center space-x-2">
@@ -528,7 +539,7 @@ export default function TempleEngineApp() {
           </div>
         )}
 
-        {/* TRANSACTION MODAL OVERLAY WITH UPDATED INFORMATION SCHEMAS */}
+        {/* TRANSACTION MODAL OVERLAY WITH NATIVE UPI DEEP-LINK REDIRECT ROUTING */}
         {checkoutItem && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center p-4 z-50">
             <form onSubmit={processBookingTransactionSubmit} className="bg-white rounded-2xl max-w-sm w-full p-5 space-y-4 relative overflow-hidden shadow-2xl border border-slate-100">
