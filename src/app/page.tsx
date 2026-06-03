@@ -183,7 +183,7 @@ export default function TempleEngineApp() {
       id: txnId,
       type: checkoutItem.type,
       devotee_name: devoteeName,
-      phone_number: phone, // Clean mapping targeting lowercase text column layout
+      phone_number: phone, 
       nakshatra: devoteeStar,
       gothra: devoteeGothra,
       service_title: checkoutItem.title,
@@ -194,6 +194,32 @@ export default function TempleEngineApp() {
       alert(`Transaction database pipeline failure: ${error.message}`);
       return;
     }
+
+    // 2. Database transaction recorded, initialize automatic UPI Deep-Link
+    // ⚠️ CHOOSE YOUR UPI ID: Make sure to change this to your actual trust account VPA!
+    const upiId = "yourtempleupi@bank"; 
+    
+    const businessName = encodeURIComponent("Shree Gowrishankara Sainatha Temple");
+    const amount = checkoutItem.cost.toString();
+    const transactionNote = encodeURIComponent(`Sankalpa Seva: ${checkoutItem.title} - ${devoteeName}`);
+    
+    // Official RBI/NPCI merchant code for Religious Organizations / Trusts
+    const mcc = "9399"; 
+
+    // Standardized Indian Interoperable Intent String with Merchant Identifiers
+    const upiUrl = `upi://pay?pa=${upiId}&pn=${businessName}&am=${amount}&cu=INR&tn=${transactionNote}&tr=${txnId}&mc=${mcc}&mode=02&purpose=00`;
+
+    // Reset workflow states before executing interface route hop
+    setCheckoutItem(null);
+    setDevoteeName('');
+    setPhone('');
+    setDevoteeStar('');
+    setDevoteeGothra('');
+    syncCoreDatabaseEngine();
+
+    // 3. Fire layout intent overlay trigger to open phone apps instantly
+    window.location.href = upiUrl;
+  };
 
     // 2. Database transaction recorded, initialize automatic UPI Deep-Link
     // ⚠️ REPLACE THIS STRING WITH THE TEMPLE'S ACTUAL UPI ID (VPA) BEFORE PUSHING LIVE
