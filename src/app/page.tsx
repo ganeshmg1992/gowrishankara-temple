@@ -197,7 +197,7 @@ export default function TempleEngineApp() {
 
     // 2. Database transaction recorded, initialize automatic UPI Deep-Link
     // ⚠️ REPLACE THIS STRING WITH THE TEMPLE'S ACTUAL UPI ID (VPA) BEFORE PUSHING LIVE
-    const upiId = "yourtempleupi@bank"; 
+    const upiId = "gowrishankaraganapathi@sbi"; 
     
     const businessName = encodeURIComponent("Shree Gowrishankara Sainatha Temple");
     const amount = checkoutItem.cost.toString();
