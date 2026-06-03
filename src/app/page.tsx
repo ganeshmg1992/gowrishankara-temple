@@ -278,7 +278,7 @@ export default function TempleEngineApp() {
             <h1 className="font-bold tracking-wide text-md sm:text-lg">
               {isKannada ? "ಶ್ರೀ ಗೌರಿ ಶಂಕರ ಸಾಯಿನಾಥ ದೇವಸ್ಥಾನ" : "Shree Gowrishankara Sainatha Temple"}
             </h1>
-            <p className="text-[10px] text-amber-200 tracking-wider uppercase font-medium">Bhattarahalli Complex Engine Node</p>
+            <p className="text-[10px] text-amber-200 tracking-wider uppercase font-medium">Chikkabanavara</p>
           </div>
         </div>
         <div className="flex items-center space-x-2">
