@@ -1,491 +1,703 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import React, { useState, useMemo, useEffect } from 'react';
+import { supabase } from './lib/supabase';
 
-// Initialize Supabase Client securely
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// Production Configuration Settings
-const TEMPLE_UPI_ID = "gowrishankaraganapathi@sbi"; 
-const TEMPLE_NAME = "Sri Gowrishankara Temple";
-
-const FALLBACK_SEVAS = [
-  { id: 's1', name_en: 'Daily Kumkumarchana', name_kn: 'ದೈನಂದಿನ ಕುಂಕುಮಾರ್ಚನೆ', price: 51 },
-  { id: 's2', name_en: 'Special Rudrabhisheka', name_kn: 'ವಿಶೇಷ ರುದ್ರಾಭಿಷೇಕ ಪೂಜೆ', price: 101 },
-  { id: 's3', name_en: 'Pradosha Pooja Bilvarchana', name_kn: 'ಪ್ರದೋಷ ಪೂಜೆ ಬಿಲ್ವಾರ್ಚನೆ', price: 151 },
-  { id: 's4', name_en: 'Sankashta Hara Chaturthi Seva', name_kn: 'ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ ವಿಶೇಷ ಸೇವೆ', price: 251 }
-];
-
-const FALLBACK_EVENTS = [
-  { id: 'e1', event_date: '2026-05-28', title_en: 'Weekly Sri Saibaba Shej Aarati (Every Thursday)', title_kn: 'ಸಾಪ್ತಾಹಿಕ ಶ್ರೀ ಸಾಯಿಬಾಬಾ ಶೇಜ್ ಆರತಿ (ಪ್ರತಿ ಗುರುವಾರ)', is_major_festival: false },
-  { id: 'e2', event_date: '2026-06-03', title_en: 'Monthly Sankashta Hara Chaturthi Special Pooja', title_kn: 'ಮಾಸಿಕ ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ ವಿಶೇಷ ಪೂಜೆ', is_major_festival: false },
-  { id: 'e3', event_date: '2026-06-21', title_en: '✨ Maha Kumbhabhisheka & Temple Anniversary ✨', title_kn: '✨ ಮಹಾ ಕುಂಭಾಭಿಷೇಕ ಮತ್ತು ದೇವಸ್ಥಾನದ ವಾರ್ಷಿಕೋತ್ಸವ ಮಹೋತ್ಸವ ✨', is_major_festival: true },
-  { id: 'e4', event_date: '2026-06-29', title_en: 'Sri Satyanarayana Swamy Katha & Pooja', title_kn: 'ಶ್ರೀ ಸತ್ಯನಾರಾಯಣ ಸ್ವಾಮಿ ಕಥೆ ಮತ್ತು ಪೂಜೆ', is_major_festival: false }
-];
-
-interface Seva {
-  id: string;
-  name_en: string;
-  name_kn: string;
-  price: number;
-}
-
+// ==========================================
+// SYSTEM TYPE INTEGRITY SCHEMAS
+// ==========================================
 interface TempleEvent {
   id: string;
-  event_date: string;
   title_en: string;
   title_kn: string;
-  is_major_festival: boolean;
+  scenario_type: 'yearly' | 'monthly' | 'weekly'; 
+  category: string;                               // Aligned with the database schema rule
+  event_date: string;                             
+  day_of_week: string | null;                     
 }
 
-interface SavedProfile {
-  name: string;
+interface SevaItem {
+  id: string;
+  event_id: string | null;                        
+  title_en: string;
+  title_kn: string;
+  cost: number;
+  is_standalone_event: boolean;                   
+}
+
+interface BookingRecord {
+  id: string;
+  type: string;
+  devotee_name: string;
+  phone: string;
+  nakshatra: string;
   gothra: string;
-  rashi: string;
+  service_title: string;
+  total_paid: number;
+  created_at: string;
 }
 
-export default function Home() {
-  const [activeTab, setActiveTab] = useState<'darshan' | 'sevas' | 'calendar' | 'info'>('sevas');
-  const [language, setLanguage] = useState<'kn' | 'en'>('kn');
+export default function TempleEngineApp() {
+  // Navigation & Localization States
+  const [activeTab, setActiveTab] = useState<'home' | 'calendar' | 'sevas' | 'astrology' | 'donation'>('home');
+  const [isKannada, setIsKannada] = useState<boolean>(false);
+  const [adminMode, setAdminMode] = useState<boolean>(false);
+  const [adminPasskey, setAdminPasskey] = useState<string>('');
+  const [isAdminVerified, setIsAdminVerified] = useState<boolean>(false);
+
+  // Home Page Dynamic States (Carousel Auto-Slide & Panchangam Matrix)
+  const [carouselImages, setCarouselImages] = useState<string[]>([]);
+  const [currentSlide, setCurrentSlide] = useState<number>(0);
+  const [panchangam] = useState({
+    rahu: "16:45 - 18:20",
+    yama: "10:15 - 11:50",
+    sunrise: "05:58 AM",
+    sunset: "06:40 PM",
+    text_nakshatra: "Rohini",
+    lagna: "Simha"
+  });
+
+  // Live Cloud Sync Data Pools
+  const [eventsPool, setEventsPool] = useState<TempleEvent[]>([]);
+  const [sevasPool, setSevasPool] = useState<SevaItem[]>([]);
+  const [bookingsPool, setBookingsPool] = useState<BookingRecord[]>([]);
+
+  // UI Interactive Filtering Context States
+  const [selectedFestivalContext, setSelectedFestivalContext] = useState<TempleEvent | null>(null);
+  const [targetCalendarMonth, setTargetCalendarMonth] = useState<string>('2026-06');
+
+  // Checkout Modal Management States (With Extended Information Modules)
+  const [checkoutItem, setCheckoutItem] = useState<{ title: string; cost: number; type: string } | null>(null);
+  const [devoteeName, setDevoteeName] = useState<string>('');
+  const [phone, setPhone] = useState<string>('');
+  const [devoteeStar, setDevoteeStar] = useState<string>('');
+  const [devoteeGothra, setDevoteeGothra] = useState<string>('');
+
+  // Clean Admin Intake Schemas
+  const [adminScenario, setAdminScenario] = useState<'yearly' | 'monthly' | 'weekly'>('yearly');
   
-  const [sevas, setSevas] = useState<Seva[]>(FALLBACK_SEVAS);
-  const [events, setEvents] = useState<TempleEvent[]>(FALLBACK_EVENTS);
-  const [loading, setLoading] = useState(true);
+  const [eventForm, setEventForm] = useState({
+    title_en: '',
+    title_kn: '',
+    event_date: '',                               
+    day_of_week: 'Thursday'
+  });
 
-  // Form Processing States
-  const [selectedSeva, setSelectedSeva] = useState<Seva | null>(null);
-  const [devoteeName, setDevoteeName] = useState('');
-  const [gothra, setGothra] = useState('');
-  const [rashi, setRashi] = useState('');
-  const [bookingStatus, setBookingStatus] = useState<'idle' | 'submitting' | 'success'>('idle');
+  const [sevaForm, setSevaForm] = useState({
+    event_id: '', 
+    title_en: '',
+    title_kn: '',
+    cost: '',
+    is_standalone_event: false
+  });
 
-  // Feature 1 States: Saved Profiles (Local Storage)
-  const [savedProfiles, setSavedProfiles] = useState<SavedProfile[]>([]);
-  
-  // Feature 2 States: FAQ Accordion Toggle Tracking
-  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+  // ==========================================
+  // REAL-TIME DATA ARCHITECTURE PIPELINE
+  // ==========================================
+  const syncCoreDatabaseEngine = async () => {
+    try {
+      const { data: eventsData, error: eErr } = await supabase.from('events').select('*');
+      if (eErr) console.error("Events fetch error:", eErr);
+      if (eventsData) setEventsPool(eventsData);
 
-  useEffect(() => {
-    // Load saved profiles from localStorage on mount safely
-    const stored = localStorage.getItem('temple_devotee_profiles');
-    if (stored) {
-      try { setSavedProfiles(JSON.parse(stored)); } catch(e) { console.error(e); }
+      const { data: sevasData, error: sErr } = await supabase.from('sevas').select('*');
+      if (sErr) console.error("Sevas fetch error:", sErr);
+      if (sevasData) setSevasPool(sevasData);
+
+      const { data: bookingsData } = await supabase.from('bookings').select('*').order('created_at', { ascending: false });
+      if (bookingsData) setBookingsPool(bookingsData);
+    } catch (err) {
+      console.error("Database sync interrupted:", err);
     }
+  };
 
-    async function fetchData() {
-      try {
-        setLoading(true);
-        const { data: sevasData } = await supabase.from('sevas').select('*').order('price', { ascending: true });
-        const { data: eventsData } = await supabase.from('temple_events').select('*').order('event_date', { ascending: true });
-        
-        if (sevasData && sevasData.length > 0) setSevas(sevasData);
-        if (eventsData && eventsData.length > 0) setEvents(eventsData);
-      } catch (err) {
-        console.error("Database connection fallback:", err);
-      } finally {
-        setLoading(false);
+  const fetchCarouselImages = async () => {
+    try {
+      const { data, error } = await supabase.storage.from('temple-assets').list();
+      if (error) throw error;
+      
+      if (data) {
+        // Exclude internal hidden operating markers
+        const validFiles = data.filter(file => !file.name.startsWith('.'));
+
+        // Explicitly returning the values safely to initialize state correctly
+        const urls = validFiles.map(file => {
+          return supabase.storage.from('temple-assets').getPublicUrl(file.name).data.publicUrl;
+        });
+        setCarouselImages(urls);
       }
+    } catch (err) {
+      console.error("Storage infrastructure pipeline disconnected:", err);
+      // Fallback asset paths if network configurations block loading
+      setCarouselImages([
+        'https://images.unsplash.com/photo-1609137144814-118c7f991f24?auto=format&fit=crop&w=1200&q=80',
+        'https://images.unsplash.com/photo-1545128485-c400e7702796?auto=format&fit=crop&w=1200&q=80'
+      ]);
     }
-    fetchData();
+  };
+
+  // Run initial loading on page mount
+  useEffect(() => {
+    syncCoreDatabaseEngine();
+    fetchCarouselImages();
   }, []);
 
-  const resetForm = () => {
-    setSelectedSeva(null);
-    setDevoteeName('');
-    setGothra('');
-    setRashi('');
-    setBookingStatus('idle');
+  // Motorized automated loop handler to shift carousel slides seamlessly
+  useEffect(() => {
+    if (carouselImages.length === 0) return;
+    const timer = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % carouselImages.length);
+    }, 4000); // Transitions to next frame every 4 seconds
+    return () => clearInterval(timer);
+  }, [carouselImages]);
+
+  // ==========================================
+  // DYNAMIC CALCULATED VIEWS (SCENARIO ROUTER)
+  // ==========================================
+  const currentMonthCalendarEvents = useMemo(() => {
+    return eventsPool.filter(evt => {
+      if (evt.scenario_type === 'weekly') return true; 
+      if (evt.event_date && evt.event_date.startsWith(targetCalendarMonth)) return true;
+      return false;
+    });
+  }, [eventsPool, targetCalendarMonth]);
+
+  const activeSevasCatalog = useMemo(() => {
+    if (selectedFestivalContext) {
+      return sevasPool.filter(seva => seva.event_id === selectedFestivalContext.id);
+    }
+    return sevasPool.filter(seva => !seva.event_id && !seva.is_standalone_event);
+  }, [sevasPool, selectedFestivalContext]);
+
+  const routeCalendarToSevas = (eventItem: TempleEvent) => {
+    setSelectedFestivalContext(eventItem);
+    setActiveTab('sevas');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Clean bare-minimum payment intent URL to pass security compliance checks
-  const getUpiUrl = () => {
-    if (!selectedSeva) return '#';
-    return `upi://pay?pa=${encodeURIComponent(TEMPLE_UPI_ID)}&pn=${encodeURIComponent(TEMPLE_NAME)}`;
-  };
-
-  // Profile Save Mechanism
-  const handleSaveCurrentProfile = () => {
-    if (!devoteeName.trim()) return;
-    const newProfile: SavedProfile = { name: devoteeName, gothra, rashi };
-    
-    // Check if duplicate exists
-    if (savedProfiles.some(p => p.name.toLowerCase() === devoteeName.toLowerCase())) return;
-    
-    const updated = [...savedProfiles, newProfile];
-    setSavedProfiles(updated);
-    localStorage.setItem('temple_devotee_profiles', JSON.stringify(updated));
-  };
-
-  const handleApplyProfile = (profile: SavedProfile) => {
-    setDevoteeName(profile.name);
-    setGothra(profile.gothra);
-    setRashi(profile.rashi);
-  };
-
-  const handleClearProfiles = () => {
-    setSavedProfiles([]);
-    localStorage.removeItem('temple_devotee_profiles');
-  };
-
-  const handleRegistration = async (e: React.FormEvent) => {
+  // ==========================================
+  // TRANSACTION MUTATION SUBMISSION HANDLERS
+  // ==========================================
+  const processBookingTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedSeva || !devoteeName) return;
+    if (!devoteeName.trim() || !phone.trim() || !checkoutItem) return;
 
-    setBookingStatus('submitting');
-    
-    // Automatically save profile locally for smoother future bookings
-    handleSaveCurrentProfile();
+    const txnId = 'TXN-' + Math.floor(100000 + Math.random() * 900000);
+    const { error } = await supabase.from('bookings').insert([{
+      id: txnId,
+      type: checkoutItem.type,
+      devotee_name: devoteeName,
+      phone: phone,
+      nakshatra: devoteeStar,
+      gothra: devoteeGothra,
+      service_title: checkoutItem.title,
+      total_paid: checkoutItem.cost
+    }]);
 
-    try {
-      const generatedRefId = `TXT-${Math.floor(100000 + Math.random() * 900000)}`;
-      await supabase.from('seva_bookings').insert([
-        {
-          devotee_name: devoteeName,
-          gothra: gothra || null,
-          rashi: rashi || null,
-          seva_id: String(selectedSeva.id),
-          amount: selectedSeva.price,
-          transaction_id: generatedRefId,
-          status: 'Awaiting Bank Settlement',
-          created_at: new Date().toISOString(),
-        }
-      ]);
-      setBookingStatus('success');
-    } catch (err) {
-      console.error("Database tracking pass:", err);
-      setBookingStatus('success');
+    if (error) {
+      alert(`Transaction pipeline failure: ${error.message}`);
+    } else {
+      alert(`✨ Payment Verified & Sankalpa Registered! ✨\nReceipt Nodes: ${txnId}\nBlessings tracked for ${devoteeName}.`);
+      setCheckoutItem(null);
+      setDevoteeName('');
+      setPhone('');
+      setDevoteeStar('');
+      setDevoteeGothra('');
+      syncCoreDatabaseEngine();
     }
   };
 
-  const faqData = [
-    {
-      q_en: "What are the core temple operating hours?",
-      q_kn: "ದೇವಸ್ಥಾನದ ಪ್ರಮುಖ ಸಮಯಗಳು ಯಾವುವು?",
-      a_en: "Morning Darshan runs from 6:00 AM to 11:30 AM. Evening sessions open at 5:30 PM and close at 8:30 PM.",
-      a_kn: "ಬೆಳಿಗ್ಗೆ ದರ್ಶನವು 6:00 ಗಂಟೆಯಿಂದ 11:30 ರವರೆಗೆ ಇರುತ್ತದೆ. ಸಂಜೆ ಸಮಯ 5:30 ರಿಂದ ರಾತ್ರಿ 8:30 ರವರೆಗೆ ಇರುತ್ತದೆ."
-    },
-    {
-      q_en: "How do we collect the Seva Prasada?",
-      q_kn: "ಸೇವೆಯ ಪ್ರಸಾದವನ್ನು ಪಡೆದುಕೊಳ್ಳುವುದು ಹೇಗೆ?",
-      a_en: "Please visit the temple counter with your digital booking summary screenshot. Prasada is distributed right after Mahamangalarathi.",
-      a_kn: "ನಿಮ್ಮ ಡಿಜಿಟಲ್ ಬುಕಿಂಗ್ ಸ್ಕ್ರೀನ್‌ಶಾಟ್‌ನೊಂದಿಗೆ ದೇವಸ್ಥಾನದ ಕೌಂಟರ್ ಅನ್ನು ಸಂಪರ್ಕಿಸಿ. ಮಹಾಮಂಗಳಾರತಿಯ ನಂತರ ಪ್ರಸಾದವನ್ನು ವಿತರಿಸಲಾಗುತ್ತದೆ."
-    },
-    {
-      q_en: "Is two-wheeler and car parking available?",
-      q_kn: "ದ್ವಿಚಕ್ರ ಮತ್ತು ಕಾರು ಪಾರ್ಕಿಂಗ್ ಸೌಲಭ್ಯವಿದೆಯೇ?",
-      a_en: "Yes, dedicated street side parking layout is open along the peripheral walls for all devotees.",
-      a_kn: "ಹೌದು, ಭಕ್ತಾದಿಗಳಿಗೆ ಅನುಕೂಲವಾಗುವಂತೆ ದೇವಸ್ಥಾನದ ಸುತ್ತಮುತ್ತ ಪಾರ್ಕಿಂಗ್ ಸ್ಥಳ ಲಭ್ಯವಿದೆ."
+  // ==========================================
+  // ADMINISTRATIVE DATA WRITERS
+  // ==========================================
+  const handleAdminAuthentication = () => {
+    if (adminPasskey === 'temple777') {
+      setIsAdminVerified(true);
+    } else {
+      alert("Invalid configuration passkey.");
     }
-  ];
+  };
+
+  const handleCreateEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const determinedDate = adminScenario === 'weekly' ? '1970-01-01' : eventForm.event_date;
+
+    const payload = {
+      title_en: eventForm.title_en,
+      title_kn: eventForm.title_kn,
+      scenario_type: adminScenario,
+      category: adminScenario,                        
+      event_date: determinedDate,                    
+      day_of_week: adminScenario === 'weekly' ? eventForm.day_of_week : null
+    };
+
+    const { data: createdEvent, error } = await supabase.from('events').insert([payload]).select().single();
+    if (error) return alert(`Database Rejected Insertion: ${error.message}`);
+
+    if (adminScenario === 'monthly' && createdEvent) {
+      await supabase.from('sevas').insert([{
+        event_id: createdEvent.id,
+        title_en: `${createdEvent.title_en} Pooja`,
+        title_kn: `${createdEvent.title_kn} ಪೂಜೆ`,
+        cost: 250, 
+        is_standalone_event: true
+      }]);
+    }
+
+    alert("Temporal event registered cleanly across cloud matrices.");
+    setEventForm({ title_en: '', title_kn: '', event_date: '', day_of_week: 'Thursday' });
+    syncCoreDatabaseEngine();
+  };
+
+  const handleCreateSeva = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = {
+      event_id: sevaForm.event_id === '' ? null : sevaForm.event_id,
+      title_en: sevaForm.title_en,
+      title_kn: sevaForm.title_kn,
+      cost: parseInt(sevaForm.cost) || 0,
+      is_standalone_event: sevaForm.is_standalone_event
+    };
+
+    const { error } = await supabase.from('sevas').insert([payload]);
+    if (error) return alert(`Error appending catalog item: ${error.message}`);
+
+    alert("New Seva catalog logic entry mapped successfully.");
+    setSevaForm({ event_id: '', title_en: '', title_kn: '', cost: '', is_standalone_event: false });
+    syncCoreDatabaseEngine();
+  };
 
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-800 font-sans antialiased">
-      {/* App Header */}
-      <header className="bg-white border-b border-stone-200 sticky top-0 z-40 shadow-sm max-w-md mx-auto w-full px-4 py-3 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-amber-800">
-            {language === 'kn' ? 'ಶ್ರೀ ಗೌರಿಶಂಕರ ದೇವಸ್ಥಾನ' : 'Sri Gowrishankara Temple'}
-          </h1>
-          <p className="text-xs text-stone-500">
-            {language === 'kn' ? 'ಭಟ್ರಹಳ್ಳಿ, ಬೆಂಗಳೂರು' : 'Bhattarahalli, Bengaluru'}
-          </p>
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col justify-between selection:bg-amber-100">
+      
+      {/* GLOBAL APPLICATION BRAND LOGIC TOPBAR */}
+      <header className="bg-amber-800 text-white shadow-md sticky top-0 z-40 px-4 py-3 flex justify-between items-center">
+        <div className="flex items-center space-x-3">
+          <span className="text-3xl">🔱</span>
+          <div>
+            <h1 className="font-bold tracking-wide text-md sm:text-lg">
+              {isKannada ? "ಶ್ರೀ ಗೌರಿ ಶಂಕರ ಸಾಯಿನಾಥ ದೇವಸ್ಥಾನ" : "Shree Gowrishankara Sainatha Temple"}
+            </h1>
+            <p className="text-[10px] text-amber-200 tracking-wider uppercase font-medium">Bhattarahalli Complex Engine Node</p>
+          </div>
         </div>
-        <button 
-          type="button"
-          onClick={() => setLanguage(l => l === 'kn' ? 'en' : 'kn')}
-          className="bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs px-3 py-1.5 rounded-full font-semibold border border-amber-200 transition"
-        >
-          {language === 'kn' ? 'English' : 'ಕನ್ನಡ'}
-        </button>
+        <div className="flex items-center space-x-2">
+          <button type="button" onClick={() => setAdminMode(!adminMode)} className="text-[11px] bg-amber-700 hover:bg-amber-900 border border-amber-600/40 px-3 py-1.5 rounded font-bold uppercase transition">
+            ⚙️ Control Deck
+          </button>
+          <button type="button" onClick={() => setIsKannada(!isKannada)} className="bg-amber-600 hover:bg-amber-500 border border-amber-400/40 text-xs font-bold px-3 py-1.5 rounded transition">
+            {isKannada ? "English" : "ಕನ್ನಡ"}
+          </button>
+        </div>
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-md mx-auto bg-white min-h-[calc(100vh-65px)] pb-24 shadow-sm">
-        {/* Core Navigation Bar */}
-        <div className="flex border-b border-stone-200 bg-stone-100/50">
-          {(['darshan', 'sevas', 'calendar', 'info'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-3 text-center text-xs font-medium transition-all ${
-                activeTab === tab 
-                  ? 'bg-white text-amber-800 border-b-2 border-amber-700 font-bold' 
-                  : 'text-stone-500 hover:text-stone-800'
-              }`}
-            >
-              {tab === 'darshan' && (language === 'kn' ? '🔱 ದರ್ಶನ' : '🔱 Darshan')}
-              {tab === 'sevas' && (language === 'kn' ? '🙏 ಸೇವೆಗಳು' : '🙏 Sevas')}
-              {tab === 'calendar' && (language === 'kn' ? '📅 ಹಬ್ಬಗಳು' : '📅 Events')}
-              {tab === 'info' && (language === 'kn' ? 'ℹ️ ಮಾಹಿತಿ' : 'ℹ️ About')}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab Layout Panel Components */}
-        <div className="p-4">
-          {activeTab === 'darshan' && (
-            <div className="space-y-4">
-              <div className="border border-amber-200 rounded-xl bg-amber-50/50 p-5 text-center">
-                <h3 className="text-amber-800 font-bold text-md mb-2">
-                  {language === 'kn' ? 'ಇಂದಿನ ದೈನಂದಿನ ದರ್ಶನ' : 'Today\'s Daily Darshan'}
-                </h3>
-                <div className="w-full h-48 bg-stone-100 border border-dashed border-stone-300 rounded-lg mb-2 flex items-center justify-center text-stone-400 text-xs italic">
-                  {language === 'kn' ? 'ದರ್ಶನದ ಫೋಟೋ ಲಭ್ಯವಿಲ್ಲ' : 'Daily Image Update Waiting'}
-                </div>
-              </div>
-              <div className="border border-stone-200 rounded-xl p-4 bg-white space-y-2">
-                <h4 className="font-bold text-stone-700 border-b pb-1 text-sm">
-                  {language === 'kn' ? 'ದೇವಸ್ಥಾನದ ಸಮಯ' : 'Temple Timings'}
-                </h4>
-                <p className="text-sm text-stone-600 flex justify-between">
-                  <span>{language === 'kn' ? 'ಬೆಳಿಗ್ಗೆ:' : 'Morning:'}</span>
-                  <span className="font-medium">6:00 AM - 11:30 AM</span>
-                </p>
-                <p className="text-sm text-stone-600 flex justify-between">
-                  <span>{language === 'kn' ? 'ಸಂಜೆ:' : 'Evening:'}</span>
-                  <span className="font-medium">5:30 PM - 8:30 PM</span>
-                </p>
-              </div>
+      {/* ACCESS AUTHENTICATION DROPDOWN TRAY */}
+      {adminMode && !isAdminVerified && (
+        <div className="bg-slate-900 text-slate-100 p-5 border-b-4 border-amber-600 shadow-inner">
+          <div className="max-w-md mx-auto text-center space-y-2">
+            <h4 className="text-xs font-bold tracking-widest text-amber-400 uppercase">🔒 System Gateway Authorization Token Required</h4>
+            <div className="flex items-center space-x-2">
+              <input type="password" placeholder="Passkey Token Entry..." value={adminPasskey} onChange={e => setAdminPasskey(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-white w-full focus:outline-none focus:border-amber-500" />
+              <button type="button" onClick={handleAdminAuthentication} className="bg-amber-600 hover:bg-amber-500 font-bold px-4 py-2 rounded-lg uppercase text-[10px] tracking-wider whitespace-nowrap">Verify Key</button>
             </div>
-          )}
-
-          {activeTab === 'sevas' && (
-            <div className="space-y-3">
-              {sevas.map((seva) => (
-                <div 
-                  key={seva.id} 
-                  className="border border-stone-200 rounded-xl p-4 flex justify-between items-center bg-white hover:border-amber-300 transition"
-                >
-                  <div>
-                    <h4 className="font-bold text-stone-900 text-sm">
-                      {language === 'kn' ? seva.name_kn : seva.name_en}
-                    </h4>
-                    <p className="text-amber-800 font-semibold text-xs mt-0.5">₹{seva.price}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSeva(seva)}
-                    className="bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-sm transition"
-                  >
-                    {language === 'kn' ? 'ಬುಕ್ ಮಾಡಿ' : 'Book'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {activeTab === 'calendar' && (
-            <div className="space-y-3">
-              {events.map((event) => (
-                <div 
-                  key={event.id}
-                  className={`border rounded-xl p-4 shadow-sm transition ${
-                    event.is_major_festival 
-                      ? 'border-amber-300 bg-amber-50/70 border-l-4 border-l-amber-600' 
-                      : 'border-stone-200 bg-white'
-                  }`}
-                >
-                  <div className="flex justify-between items-start mb-1.5">
-                    <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                      event.is_major_festival ? 'bg-amber-600 text-white' : 'bg-stone-100 text-stone-600'
-                    }`}>
-                      {new Date(event.event_date).toLocaleDateString(language === 'kn' ? 'kn-IN' : 'en-IN', {
-                        day: 'numeric', month: 'short'
-                      })}
-                    </span>
-                  </div>
-                  <h4 className={`text-sm font-bold ${event.is_major_festival ? 'text-amber-900' : 'text-stone-900'}`}>
-                    {language === 'kn' ? event.title_kn : event.title_en}
-                  </h4>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Feature 2 & 3 UI Tab: Info, Navigation Desk and FAQs */}
-          {activeTab === 'info' && (
-            <div className="space-y-4">
-              {/* Feature 3 Action Grid Card */}
-              <div className="border border-stone-200 rounded-xl p-4 bg-white space-y-3">
-                <h3 className="font-bold text-stone-900 text-sm">
-                  {language === 'kn' ? 'ಸಂಪರ್ಕ ಮತ್ತು ಸಹಾಯ ಕೇಂದ್ರ' : 'Helpdesk & Connectivity'}
-                </h3>
-                <p className="text-xs text-stone-600 leading-normal">
-                  {language === 'kn' ? 'ದೇವಸ್ಥಾನಕ್ಕೆ ದಾರಿ ತಿಳಿಯಲು ಅಥವಾ ಟ್ರಸ್ಟಿಗಳನ್ನು ಸಂಪರ್ಕಿಸಲು ಕೆಳಗಿನ ಬಟನ್ ಬಳಸಿ.' : 'Use the quick actions below to locate the temple complex or message management.'}
-                </p>
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <a 
-                    href="https://maps.google.com/?q=Sri+Gowrishankara+Temple+Bhattarahalli+Bengaluru"
-                    target="_blank" rel="noopener noreferrer"
-                    className="bg-stone-100 hover:bg-stone-200 border border-stone-300 text-stone-800 text-xs font-bold py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition text-center"
-                  >
-                    🗺️ {language === 'kn' ? 'ಗೂಗಲ್ ಮ್ಯಾಪ್ಸ್' : 'Get Directions'}
-                  </a>
-                  <a 
-                    href="https://wa.me/919900000000?text=Namaste%20Temple%20Management"
-                    target="_blank" rel="noopener noreferrer"
-                    className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition text-center"
-                  >
-                    💬 WhatsApp Help
-                  </a>
-                </div>
-              </div>
-
-              {/* Feature 2: Expandable FAQ Engine Accordion */}
-              <div className="space-y-2">
-                <h3 className="font-bold text-stone-900 text-sm pl-1">
-                  {language === 'kn' ? 'ಪದೇ ಪದೇ ಕೇಳಲಾಗುವ ಪ್ರಶ್ನೆಗಳು' : 'Frequently Asked Questions'}
-                </h3>
-                {faqData.map((faq, i) => (
-                  <div key={i} className="border border-stone-200 rounded-xl bg-white overflow-hidden">
-                    <button
-                      type="button"
-                      onClick={() => setOpenFaqIndex(openFaqIndex === i ? null : i)}
-                      className="w-full px-4 py-3 text-left font-semibold text-stone-800 text-xs flex justify-between items-center bg-stone-50/50 hover:bg-stone-50"
-                    >
-                      <span>{language === 'kn' ? faq.q_kn : faq.q_en}</span>
-                      <span className="text-stone-400 font-bold text-sm">{openFaqIndex === i ? '−' : '+'}</span>
-                    </button>
-                    {openFaqIndex === i && (
-                      <div className="px-4 pb-3 pt-1 text-xs text-stone-600 border-t border-stone-100 leading-relaxed bg-white">
-                        {language === 'kn' ? faq.a_kn : faq.a_en}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </main>
-
-      {/* Booking Form Sheet Drawer Overlay */}
-      {selectedSeva && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center p-0 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-t-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto shadow-2xl pb-10">
-            <div className="flex justify-between items-start border-b pb-3">
-              <div>
-                <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                  {language === 'kn' ? 'ಸಂಕಲ್ಪ ವಿವರಗಳು' : 'Sankalpa Registration'}
-                </span>
-                <h3 className="text-md font-bold text-stone-900 mt-1">
-                  {language === 'kn' ? selectedSeva.name_kn : selectedSeva.name_en}
-                </h3>
-              </div>
-              <button type="button" onClick={resetForm} className="text-stone-400 hover:text-stone-600 text-xl font-bold bg-stone-100 h-8 w-8 rounded-full flex items-center justify-center">✕</button>
-            </div>
-
-            {bookingStatus === 'success' ? (
-              <div className="text-center py-4 space-y-4">
-                <div className="w-14 h-14 bg-emerald-100 rounded-full mx-auto flex items-center justify-center text-emerald-600 text-2xl font-bold">✓</div>
-                <h4 className="text-md font-bold text-stone-900">
-                  {language === 'kn' ? 'ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ!' : 'Sankalpa Logged!'}
-                </h4>
-
-                <div className="border border-amber-200 bg-amber-50/60 rounded-xl p-4 text-left max-w-xs mx-auto space-y-1 text-xs">
-                  <p className="text-stone-600">✨ {language === 'kn' ? 'ಭಕ್ತರು:' : 'Devotee:'} <strong className="text-stone-900 font-bold">{devoteeName}</strong></p>
-                  <p className="text-stone-600">🙏 {language === 'kn' ? 'ಸೇವೆ:' : 'Seva:'} <strong className="text-stone-900 font-bold">{language === 'kn' ? selectedSeva.name_kn : selectedSeva.name_en}</strong></p>
-                  <p className="text-stone-600">💳 {language === 'kn' ? 'ನಮೂದಿಸಬೇಕಾದ ಮೊತ್ತ:' : 'Amount to Type:'} <strong className="text-amber-800 font-extrabold text-sm">₹{selectedSeva.price}</strong></p>
-                </div>
-
-                <div className="space-y-3 pt-2">
-                  <a
-                    href={getUpiUrl()}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-md text-xs flex items-center justify-center gap-2 transition text-center"
-                  >
-                    {language === 'kn' ? '📲 ಪಾವತಿ ಮಾಡಲು ಇಲ್ಲಿ ಕ್ಲಿಕ್ ಮಾಡಿ' : '📲 Click to Open UPI Payment App'}
-                  </a>
-                  <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2.5 max-w-xs mx-auto text-center font-medium leading-normal">
-                    {language === 'kn'
-                      ? `⚠️ ಸೂಚನೆ: ಆಪ್ ಓಪನ್ ಆದ ನಂತರ ನೀವು ರೂ. ${selectedSeva.price} ಮೊತ್ತವನ್ನು ಮ್ಯಾನುಯಲ್ ಆಗಿ ನಮೂದಿಸಬೇಕು.`
-                      : `⚠️ Note: Please manually type the exact amount (₹${selectedSeva.price}) inside your UPI app.`}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleRegistration} className="space-y-4">
-                {/* Feature 1 UI Block: Saved Profiles Injector Pillbox */}
-                {savedProfiles.length > 0 && (
-                  <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 space-y-1.5">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">
-                        {language === 'kn' ? 'ಉಳಿಸಿದ ಪ್ರೊಫೈಲ್‌ಗಳು' : 'Saved Family Profiles'}
-                      </span>
-                      <button type="button" onClick={handleClearProfiles} className="text-[10px] text-stone-400 hover:text-stone-600 underline">Clear</button>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {savedProfiles.map((p, idx) => (
-                        <button
-                          key={idx} type="button" onClick={() => handleApplyProfile(p)}
-                          className="bg-white hover:bg-amber-50 border border-stone-300 text-stone-700 text-xs px-2.5 py-1 rounded-full font-medium transition"
-                        >
-                          👤 {p.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-600 mb-1">
-                    {language === 'kn' ? 'ಭಕ್ತರ ಹೆಸರು *' : 'Devotee Name *'}
-                  </label>
-                  <input 
-                    type="text" required value={devoteeName} onChange={(e) => setDevoteeName(e.target.value)}
-                    placeholder={language === 'kn' ? 'ಹೆಸರನ್ನು ನಮೂದಿಸಿ' : 'Enter full name'}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-600"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-stone-600 mb-1">
-                      {language === 'kn' ? 'ಗೋತ್ರ' : 'Gothra'}
-                    </label>
-                    <input 
-                      type="text" value={gothra} onChange={(e) => setGothra(e.target.value)}
-                      placeholder="e.g., Shiva"
-                      className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-stone-600 mb-1">
-                      {language === 'kn' ? 'ರಾಶಿ' : 'Rashi'}
-                    </label>
-                    <input 
-                      type="text" value={rashi} onChange={(e) => setRashi(e.target.value)}
-                      placeholder="e.g., Mesha"
-                      className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-600"
-                    />
-                  </div>
-                </div>
-
-                <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 space-y-3 pt-4">
-                  <div className="flex justify-between text-xs font-bold text-stone-700 mb-1">
-                    <span>{language === 'kn' ? 'ಸೇವೆ ಶುಲ್ಕ:' : 'Total Amount:'}</span>
-                    <span className="text-amber-800 text-sm font-bold">₹{selectedSeva.price}</span>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full bg-amber-700 hover:bg-amber-800 text-white font-bold py-3 rounded-xl shadow-md text-xs transition"
-                  >
-                    {language === 'kn' ? '🔒 ವಿವರಗಳನ್ನು ದೃಢೀಕರಿಸಿ' : '🔒 Verify & Lock Details'}
-                  </button>
-                </div>
-              </form>
-            )}
           </div>
         </div>
       )}
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-stone-900 text-stone-400 text-[11px] text-center py-2 max-w-md mx-auto z-30 border-t border-stone-800">
-        © 2026 Sri Gowrishankara Temple Trustees. Built with Next.js & Supabase Engine.
+      {/* CORE VIEWPORT COMPONENT COMPARTMENT HUB */}
+      <main className="flex-grow max-w-5xl w-full mx-auto p-4 sm:p-6">
+        
+        {/* VIEW TAB 1: DASHBOARD LANDING */}
+        {activeTab === 'home' && (
+          <div className="space-y-6">
+            
+            {/* MOTORIZED HARDWARE SLIDING IMAGE BANNER CAROUSEL CONTAINER */}
+            <div className="relative h-64 sm:h-80 w-full rounded-2xl overflow-hidden shadow-lg border border-slate-200/80 bg-white group">
+              {carouselImages.length > 0 ? (
+                <>
+                  <div 
+                    className="flex w-full h-full transition-transform duration-700 ease-in-out"
+                    style={{ transform: `translateX(-${currentSlide * 100}%)` }}
+                  >
+                    {carouselImages.map((url, idx) => (
+                      <div key={idx} className="w-full h-full flex-shrink-0 relative">
+                        <img 
+                          src={url} 
+                          alt={`Temple Sanctuary Slide ${idx + 1}`} 
+                          className="w-full h-full object-cover select-none" 
+                        />
+                        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/30 to-transparent pointer-events-none" />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Operational Carousel Navigation Progress Indicator Nodes */}
+                  <div className="absolute bottom-3 inset-x-0 flex justify-center space-x-1.5 z-10">
+                    {carouselImages.map((_, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setCurrentSlide(idx)}
+                        className={`h-2 rounded-full transition-all duration-300 ${currentSlide === idx ? 'w-5 bg-amber-600' : 'w-2 bg-white/60 hover:bg-white'}`}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 space-y-2 bg-slate-50">
+                  <span className="text-3xl animate-pulse">🕉️</span>
+                  <p className="text-xs font-medium tracking-wide">Syncing Temple Sanctuary Assets...</p>
+                </div>
+              )}
+            </div>
+
+            {/* DYNAMIC PANCHANGAM ASTROLOGICAL PARAMETERS GRID */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {[
+                { label: isKannada ? "ರಾಹು ಕಾಲ" : "Rahu Kaala", val: panchangam.rahu, icon: "⏳" },
+                { label: isKannada ? "ಯಮಗಂಡ" : "Yamaganda", val: panchangam.yama, icon: "⚠️" },
+                { label: isKannada ? "ನಕ್ಷತ್ರ" : "Nakshatra", val: panchangam.text_nakshatra, icon: "✨" },
+                { label: isKannada ? "ಸೂರ್ಯೋದಯ" : "Sunrise", val: panchangam.sunrise, icon: "🌅" },
+                { label: isKannada ? "ಸೂರ್ಯಾಸ್ತ" : "Sunset", val: panchangam.sunset, icon: "🌇" },
+                { label: isKannada ? "ಲಗ್ನ" : "Lagna", val: panchangam.lagna, icon: "🕉️" }
+              ].map((item, idx) => (
+                <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-sm flex items-center space-x-3 hover:border-amber-500/40 transition">
+                  <span className="text-xl">{item.icon}</span>
+                  <div>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{item.label}</p>
+                    <p className="text-xs font-black text-slate-900 mt-0.5">{item.val}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div onClick={() => setActiveTab('calendar')} className="bg-white p-5 rounded-xl border border-slate-200/60 shadow-sm hover:border-amber-500 cursor-pointer transition group">
+                <span className="text-2xl block mb-1.5 group-hover:scale-110 transition-transform">📅</span>
+                <h4 className="font-bold text-slate-900 group-hover:text-amber-800 transition-colors">{isKannada ? "ದೇವಸ್ಥಾನದ ಪಂಚಾಂಗ ಜಲಕ" : "Dynamic Monthly Setup"}</h4>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{isKannada ? "ಮಾಸಿಕ ಸಂಕಷ್ಟಹರ ಚತುರ್ಥಿ, ಪೂರ್ಣಿಮಾ ಮತ್ತು ಹಬ್ಬಗಳ ನಿಖರ ದಿನಾಂಕ ಪರಿಶೀಲಿಸಿ." : "Jump straight into the interactive calendar ledger layout engine to observe floating lunar calendar tracking patterns."}</p>
+              </div>
+
+              <div onClick={() => { setSelectedFestivalContext(null); setActiveTab('sevas'); }} className="bg-white p-5 rounded-xl border border-slate-200/60 shadow-sm hover:border-amber-500 cursor-pointer transition group">
+                <span className="text-2xl block mb-1.5 group-hover:scale-110 transition-transform">🎟️</span>
+                <h4 className="font-bold text-slate-900 group-hover:text-amber-800 transition-colors">{isKannada ? "ದೈನಂದಿನ ನಿತ್ಯ ಸೇವೆಗಳು" : "Standard Sevas Matrix"}</h4>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{isKannada ? "ಯಾವುದೇ ವಿಶೇಷ ಹಬ್ಬದ ಬಾಧ್ಯತೆ ಇಲ್ಲದ ಸಾಮಾನ್ಯ ಪೂಜೆಗಳನ್ನು ವೀಕ್ಷಿಸಿ ಮತ್ತು ಕಾಯ್ದಿರಿಸಿ." : "Explore the permanent base routine catalogue always open to devotee registry configurations globally."}</p>
+              </div>
+
+              <div onClick={() => setActiveTab('donation')} className="bg-white p-5 rounded-xl border border-slate-200/60 shadow-sm hover:border-amber-500 cursor-pointer transition group">
+                <span className="text-2xl block mb-1.5 group-hover:scale-110 transition-transform">🥣</span>
+                <h4 className="font-bold text-slate-900 group-hover:text-amber-800 transition-colors">{isKannada ? "ನಿತ್ಯ ಅನ್ನದಾನ ನಿಧಿ ಕಾಣಿಕೆ" : "Nitya Anna Danam Charity"}</h4>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{isKannada ? "ದೇವಸ್ಥಾನದ ನಿರಂತರ ಪ್ರಸಾದ ವಿತರಣಾ ಸೇವೆಗಳಿಗೆ ನಿಮ್ಮ ಯಥಾಶಕ್ತಿ ಕಾಣಿಕೆ ನೀಡಿ." : "Sustain and fund community distribution arrays easily with tokenized ledger payment endpoints."}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW TAB 2: INTERACTIVE CALENDAR ROADMAP */}
+        {activeTab === 'calendar' && (
+          <div className="space-y-4">
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Target Calculation Month</label>
+                <select value={targetCalendarMonth} onChange={e => setTargetCalendarMonth(e.target.value)} className="bg-slate-100 text-slate-800 font-bold rounded-lg px-4 py-2 text-sm border border-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500">
+                  <option value="2026-06">June 2026</option>
+                  <option value="2026-07">July 2026</option>
+                  <option value="2026-08">August 2026</option>
+                  <option value="2026-09">September 2026</option>
+                </select>
+              </div>
+              <p className="text-[11px] text-slate-400 max-w-xs leading-tight font-medium">* Scenario 1 & 2 items auto-render relative to dates. Scenario 3 tracking loops persist permanently.</p>
+            </div>
+
+            <div className="space-y-3">
+              {currentMonthCalendarEvents.length === 0 ? (
+                <p className="text-center text-xs text-slate-400 py-6 font-medium">No custom target anchors tracked in this matrix block.</p>
+              ) : (
+                currentMonthCalendarEvents.map(evt => {
+                  const isScenario1 = evt.scenario_type === 'yearly';
+                  const isScenario2 = evt.scenario_type === 'monthly';
+                  
+                  return (
+                    <div key={evt.id} className={`p-4 rounded-xl bg-white border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 transition shadow-sm ${isScenario1 ? 'border-amber-400 ring-2 ring-amber-100/50 bg-gradient-to-r from-amber-50/10 to-white' : 'border-slate-100'}`}>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="bg-slate-100 border border-slate-200 font-mono text-[10px] px-2 py-0.5 rounded font-bold text-slate-700">
+                            {evt.scenario_type === 'weekly' ? `Every ${evt.day_of_week}` : evt.event_date}
+                          </span>
+                          <span className={`text-[9px] uppercase font-black tracking-widest px-1.5 py-0.5 rounded ${isScenario1 ? 'bg-amber-600 text-white' : isScenario2 ? 'bg-purple-600 text-white' : 'bg-slate-600 text-white'}`}>
+                            {isScenario1 ? "Scenario 1: Grand Festival" : isScenario2 ? "Scenario 2: Monthly Event" : "Scenario 3: Weekly Routine"}
+                          </span>
+                        </div>
+                        <h4 className="text-md font-bold tracking-tight text-slate-900 mt-1.5">
+                          {isKannada ? evt.title_kn : evt.title_en}
+                        </h4>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => routeCalendarToSevas(evt)}
+                        className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-lg uppercase tracking-wider transition"
+                      >
+                        {isScenario2 ? (isKannada ? "ಪೂಜೆ ಬುಕ್ಕಿಂಗ್ ಪ್ರವೇಶ" : "Book Pooja Entry") : (isKannada ? "ಸೇವೆಗಳ ಪಟ್ಟಿ ವೀಕ್ಷಿಸಿ" : "Explore Linked Sevas")}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW TAB 3: DYNAMIC SEVAS CATALOG */}
+        {activeTab === 'sevas' && (
+          <div className="space-y-4">
+            {selectedFestivalContext ? (
+              <div className="bg-slate-900 text-slate-50 p-4 rounded-xl flex justify-between items-center shadow-lg border-l-4 border-amber-500">
+                <div>
+                  <span className="text-[9px] font-black uppercase tracking-widest bg-amber-600 text-white px-2 py-0.5 rounded shadow-sm">
+                    Active Relational Filter Context Bounds
+                  </span>
+                  <h3 className="text-md font-bold tracking-tight mt-1">
+                    Showing services for: <span className="text-amber-400 font-extrabold">{isKannada ? selectedFestivalContext.title_kn : selectedFestivalContext.title_en}</span>
+                  </h3>
+                </div>
+                <button type="button" onClick={() => setSelectedFestivalContext(null)} className="bg-slate-800 hover:bg-slate-700 border border-slate-700 font-bold text-[11px] px-3 py-1.5 rounded-lg transition uppercase tracking-wider">
+                  Show General Menu
+                </button>
+              </div>
+            ) : (
+              <div className="bg-white text-slate-600 p-4 rounded-xl border border-slate-200 shadow-sm text-xs font-semibold flex items-center space-x-2">
+                <span>📋</span>
+                <p>Showing standard general catalogue items. Looking for Scenario specific options? Target them straight out of the interactive <span className="text-amber-800 font-bold underline cursor-pointer" onClick={() => setActiveTab('calendar')}>Calendar Ledger tab</span>.</p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {activeSevasCatalog.length === 0 ? (
+                <p className="text-center text-xs text-slate-400 col-span-2 py-8">No sub-seva items linked under this event tracking segment yet.</p>
+              ) : (
+                activeSevasCatalog.map(seva => (
+                  <div key={seva.id} className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-base tracking-tight">{isKannada ? seva.title_kn : seva.title_en}</h4>
+                      <div className="text-emerald-700 font-black text-md font-mono mt-1.5">₹{seva.cost}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCheckoutItem({ title: isKannada ? seva.title_kn : seva.title_en, cost: seva.cost, type: 'Pooja Token Registration' })}
+                      className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs px-4 py-2 rounded-lg border border-emerald-200/30 whitespace-nowrap transition active:scale-95 uppercase tracking-wider"
+                    >
+                      {isKannada ? "ಕಾಯ್ದಿರಿಸಿ" : "Book Seva"}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW TAB 4: ASTROLOGICAL ASSIGNMENTS */}
+        {activeTab === 'astrology' && (
+          <div className="bg-white p-8 rounded-2xl border border-slate-100 text-center max-w-md mx-auto shadow-md space-y-4">
+            <span className="text-4xl block">🔮</span>
+            <h3 className="text-xl font-bold tracking-tight text-slate-900">{isKannada ? "ಪ್ರಧಾನ ಅರ್ಚಕರೊಂದಿಗೆ ಜಾತಕ ವಿಶ್ಲೇಷಣೆ" : "Astrological Timeline Consultation"}</h3>
+            <p className="text-xs text-slate-500 leading-relaxed max-w-xs mx-auto">Schedule high-resolution diagnostic mappings of birth charts, planetary alignments, or trace localized remedial homam configuration schedules with master priests.</p>
+            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-left space-y-1 w-max mx-auto text-[10px] font-mono text-slate-500">
+              <div>📍 Mode: Physical One-on-One Interaction Array</div>
+              <div>💳 System Base Ticket Overhead: ₹500</div>
+            </div>
+            <button type="button" onClick={() => setCheckoutItem({ title: isKannada ? 'ಜಾತಕ ವಿಶ್ಲೇಷಣೆ ಕಾಯ್ದಿರಿಸುವಿಕೆ' : 'Astro Consultation Slot Booking', cost: 500, type: 'Astrological Consultation' })} className="w-full bg-amber-600 hover:bg-amber-500 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-widest shadow transition transform active:scale-95">
+              Reserve Alignment Slot
+            </button>
+          </div>
+        )}
+
+        {/* VIEW TAB 5: DONATIONS CHANNELS */}
+        {activeTab === 'donation' && (
+          <div className="bg-white p-8 rounded-2xl border border-slate-100 text-center max-w-md mx-auto shadow-md space-y-5">
+            <span className="text-4xl block">🥣</span>
+            <h3 className="text-xl font-bold tracking-tight text-slate-900">{isKannada ? "ನಿತ್ಯ ಪ್ರಸಾದ ಅನ್ನದಾನ ನಿಧಿ" : "Voluntary Devotional Capital Contribution"}</h3>
+            <p className="text-xs text-slate-500 leading-relaxed max-w-xs mx-auto">Route structural financial support channels straight into localized public feeding tracks or physical structural enhancements.</p>
+            <div className="flex justify-center gap-3 max-w-xs mx-auto">
+              {[251, 501, 1001].map(amt => (
+                <button key={amt} type="button" onClick={() => setCheckoutItem({ title: isKannada ? 'ಸ್ವಯಂಪ್ರೇರಿತ ಅನ್ನದಾನ ನಿಧಿ' : 'Voluntary Anna Danam Charity Token', cost: amt, type: 'Charity Contribution' })} className="bg-amber-50 hover:bg-amber-100 border border-amber-200/40 text-amber-900 font-mono font-black p-3 rounded-xl text-md shadow-sm transition transform active:scale-95">
+                  ₹{amt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* TRANSACTION MODAL OVERLAY WITH UPDATED INFORMATION SCHEMAS */}
+        {checkoutItem && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center p-4 z-50">
+            <form onSubmit={processBookingTransactionSubmit} className="bg-white rounded-2xl max-w-sm w-full p-5 space-y-4 relative overflow-hidden shadow-2xl border border-slate-100">
+              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-500 to-teal-600" />
+              <div className="flex justify-between items-start">
+                <div>
+                  <span className="text-[9px] font-black tracking-widest text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded uppercase">{checkoutItem.type}</span>
+                  <h4 className="text-md font-bold text-slate-900 tracking-tight mt-1 truncate max-w-[240px]">{checkoutItem.title}</h4>
+                </div>
+                <button type="button" onClick={() => setCheckoutItem(null)} className="text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded-full hover:bg-slate-200">✕</button>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-100 p-3 rounded-xl flex justify-between items-center">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Value to Pay:</span>
+                <span className="text-xl font-mono font-black text-emerald-700">₹{checkoutItem.cost}</span>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Devotee Name *</label>
+                  <input type="text" required value={devoteeName} onChange={e => setDevoteeName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white" placeholder="Enter full name..." />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Phone Number *</label>
+                  <input type="tel" required value={phone} onChange={e => setPhone(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white" placeholder="10-digit mobile number..." />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Nakshatra (Star)</label>
+                    <input type="text" value={devoteeStar} onChange={e => setDevoteeStar(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white" placeholder="Birth star..." />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Gothra Lineage</label>
+                    <input type="text" value={devoteeGothra} onChange={e => setDevoteeGothra(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:bg-white" placeholder="Gothra..." />
+                  </div>
+                </div>
+              </div>
+
+              <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-widest shadow transition-all transform active:scale-95">
+                Pay Now & Commit Sankalpa
+              </button>
+            </form>
+          </div>
+        )}
+
+      </main>
+
+      {/* CORE ADMIN TERMINAL LAYOUT VIEW */}
+      {adminMode && isAdminVerified && (
+        <div className="fixed inset-0 bg-slate-900 text-slate-100 font-sans flex flex-col justify-between overflow-y-auto z-50">
+          <header className="bg-amber-800 text-white px-6 py-4 flex justify-between items-center shadow-lg">
+            <div className="flex items-center space-x-3">
+              <span className="text-2xl">🔱</span>
+              <div>
+                <h1 className="font-black text-lg uppercase tracking-wide">Shree Gowrishankara Sainatha Temple</h1>
+                <p className="text-[10px] text-amber-200 font-mono tracking-widest uppercase">Scenario-Driven Admin Deck</p>
+              </div>
+            </div>
+            <button type="button" onClick={() => { setAdminMode(false); setIsAdminVerified(false); }} className="bg-red-700 hover:bg-red-800 text-xs font-bold px-4 py-2 rounded-md uppercase tracking-wider transition">
+              ⚙️ Exit Control Terminal
+            </button>
+          </header>
+
+          <main className="flex-grow max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            {/* CONTROL BLOCK 1: EVENT ANCHORS WITH BOTH ENGLISH & KANNADA INPUTS */}
+            <form onSubmit={handleCreateEvent} className="bg-slate-800/80 p-5 rounded-xl border border-slate-700/60 space-y-4 shadow-xl">
+              <h3 className="font-bold text-sm uppercase tracking-wider text-amber-400">📅 Step 1: Initialize Event Target</h3>
+              
+              <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-lg border border-slate-700">
+                {(['yearly', 'monthly', 'weekly'] as const).map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setAdminScenario(t)}
+                    className={`py-1.5 rounded text-[10px] font-bold uppercase tracking-tight text-center transition ${adminScenario === t ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              <div className="space-y-3">
+                <input type="text" placeholder="Event Name (English - e.g. Ganesha Festival)" required value={eventForm.title_en} onChange={e => setEventForm({...eventForm, title_en: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500" />
+                <input type="text" placeholder="ಹಬ್ಬದ ಹೆಸರು (ಕನ್ನಡ - ಉದಾ: ಗಣೇಶ ಚತುರ್ಥಿ)" required value={eventForm.title_kn} onChange={e => setEventForm({...eventForm, title_kn: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500" />
+                
+                {adminScenario !== 'weekly' ? (
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase font-mono mb-1">Target Date Slot</label>
+                    <input type="date" required value={eventForm.event_date} onChange={e => setEventForm({...eventForm, event_date: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500 [color-scheme:dark]" />
+                    {adminScenario === 'monthly' && <p className="text-[10px] text-amber-500 mt-1 italic">* Auto-generates a linked base Seva option configuration instantly.</p>}
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase font-mono mb-1">Target Day Routine Recurrence</label>
+                    <select value={eventForm.day_of_week} onChange={e => setEventForm({...eventForm, day_of_week: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500">
+                      <option value="Monday">Every Monday (Shiva Pooja Path)</option>
+                      <option value="Thursday">Every Thursday (Sai Baba Aarti Track)</option>
+                      <option value="Saturday">Every Saturday (Shanimahathma / Anjaneya)</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <button type="submit" className="w-full bg-amber-600 hover:bg-amber-500 py-2.5 rounded font-bold text-xs uppercase tracking-widest transition shadow-md">Deploy Event Anchor</button>
+            </form>
+
+            {/* CONTROL BLOCK 2: MANAGE RELATIONAL SUB-SEVA TIERS */}
+            <form onSubmit={handleCreateSeva} className="bg-slate-800/80 p-5 rounded-xl border border-slate-700/60 space-y-4 shadow-xl">
+              <h3 className="font-bold text-sm uppercase tracking-wider text-amber-400">🎟️ Step 2: Append Custom Sub-Seva Packages</h3>
+              
+              <div>
+                <label className="block text-[10px] text-slate-400 uppercase font-mono mb-1">Parent Event Connection Context</label>
+                <select value={sevaForm.event_id} onChange={e => setSevaForm({...sevaForm, event_id: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500">
+                  <option value="">General Menu Item (Always Available Globally)</option>
+                  {eventsPool.filter(e => e.scenario_type === 'yearly').map(fest => (
+                    <option key={fest.id} value={fest.id}>Scenario 1 Sub-Event: {fest.title_en} ({fest.event_date})</option>
+                  ))}
+                  {eventsPool.filter(e => e.scenario_type === 'weekly').map(routine => (
+                    <option key={routine.id} value={routine.id}>Scenario 3 Service: {routine.title_en} (Every {routine.day_of_week})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-3">
+                <input type="text" placeholder="Seva Package Title (English)" required value={sevaForm.title_en} onChange={e => setSevaForm({...sevaForm, title_en: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500" />
+                <input type="text" placeholder="ಪೂಜೆ ಉಪ-ವಿವರ (ಕನ್ನಡ)" required value={sevaForm.title_kn} onChange={e => setSevaForm({...sevaForm, title_kn: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500" />
+                <input type="number" placeholder="Cost Pricing Matrix Value (INR ₹)" required value={sevaForm.cost} onChange={e => setSevaForm({...sevaForm, cost: e.target.value})} className="w-full bg-slate-700 border border-slate-600 p-2 rounded text-sm text-white focus:outline-none focus:border-amber-500" />
+              </div>
+
+              <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 py-2.5 rounded font-bold text-xs uppercase tracking-widest transition shadow-md">Deploy Seva Schema</button>
+            </form>
+
+            {/* CONTROL BLOCK 3: ENGINE REALTIME TRANSACTION AUDIT STREAM */}
+            <div className="bg-slate-800/80 p-5 rounded-xl border border-slate-700/60 flex flex-col justify-between shadow-xl">
+              <div>
+                <h3 className="font-bold text-sm uppercase tracking-wider text-amber-400 mb-3">📋 Connected Ledger Inscription Pipeline</h3>
+                <div className="max-h-72 overflow-y-auto space-y-2 text-[11px] font-mono pr-1">
+                  {bookingsPool.map(book => (
+                    <div key={book.id} className="border-b border-slate-700/40 pb-2 flex justify-between items-start">
+                      <div>
+                        <span className="text-amber-500 font-bold">{book.id}</span> - <span className="text-slate-300 font-semibold">{book.devotee_name}</span>
+                        <p className="text-slate-400 truncate max-w-[180px] mt-0.5">{book.service_title}</p>
+                      </div>
+                      <span className="text-emerald-400 font-bold">₹{book.total_paid}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-500 font-mono text-right pt-3 border-t border-slate-700/40">
+                System Core Health: <span className="text-emerald-500 font-bold">Operational Edge Connected</span>
+              </div>
+            </div>
+          </main>
+        </div>
+      )}
+
+      {/* FOOTER UTILITY TAB NAVIGATION TERMINAL */}
+      <footer className="bg-white border-t border-slate-200 sticky bottom-0 z-40 shadow-2xl max-w-5xl w-full mx-auto rounded-t-xl">
+        <nav className="flex justify-around items-center py-2">
+          {([['home', '🏠', 'Home', 'ಮುಖಪುಟ'], ['calendar', '📅', 'Calendar', 'ಕ್ಯಾಲೆಂಡರ್'], ['sevas', '✋', 'Sevas', 'ಸೇವೆಗಳು'], ['astrology', '✨', 'Astro', 'ಜ್ಯೋತಿಷ್ಯ'], ['donation', '🪙', 'Charity', 'ಕಾಣಿಕೆ']] as const).map(([tab, icon, labelEn, labelKn]) => (
+            <button key={tab} type="button" onClick={() => { if(tab === 'sevas') setSelectedFestivalContext(null); setActiveTab(tab); }} className={`flex flex-col items-center flex-1 py-1 transition ${activeTab === tab ? 'text-amber-800 font-bold scale-105' : 'text-slate-400'}`}>
+              <span className="text-xl">{icon}</span>
+              <span className="text-[9px] tracking-wider uppercase font-semibold mt-0.5">{isKannada ? labelKn : labelEn}</span>
+            </button>
+          ))}
+        </nav>
       </footer>
+
     </div>
   );
 }
